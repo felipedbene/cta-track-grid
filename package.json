@@ -1,0 +1,13 @@
+{
+  "name": "cta-track-grid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Realtime CTA L-train monitor on Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.95.0"
+  }
+}

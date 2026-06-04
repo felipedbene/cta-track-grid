@@ -1,0 +1,14 @@
+# Secrets / environment — never commit these
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+*.local
+
+# Dependencies & build
+node_modules/
+.wrangler/
+
+# OS / editor
+.DS_Store

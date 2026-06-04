@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CTA // TRACK GRID — REALTIME</title>
+  <link rel="shortcut icon" type="image/x-icon" href="images/favicon.ico">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+    :root {
+      --bg: #050d0a; --panel: #080f0c; --green: #00ff88;
+      --green-dim: rgba(0,255,136,0.45); --green-faint: rgba(0,255,136,0.07);
+      --border: rgba(0,255,136,0.2); --mono: 'Share Tech Mono','Courier New',monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); font-family: var(--mono); color: var(--green-dim); }
+    body { display: flex; flex-direction: column; }
+
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border); padding: 8px 14px; flex-shrink: 0; }
+    .topbar-title { font-size: 13px; letter-spacing: 4px; color: var(--green); }
+    .topbar-title span { color: #ffaa00; }
+    .topbar-meta { font-size: 10px; color: var(--green-dim); display: flex; gap: 18px; }
+    .topbar-meta b { color: var(--green); font-weight: 400; }
+    .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+      animation: blink 1.3s ease-in-out infinite; vertical-align: middle; margin-right: 5px; }
+    .pulse.stale { background: #ffaa00; }
+    .pulse.dead { background: #ff2222; animation: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.15} }
+
+    .stage { flex: 1; display: flex; min-height: 0; }
+    #map { flex: 1; background: #050d0a; }
+    .leaflet-container { background: #050d0a; }
+    /* Dark-mode the tiles into the command-grid palette. */
+    .leaflet-tile-pane { filter: invert(1) hue-rotate(155deg) brightness(0.85) contrast(1.1) saturate(0.7); }
+
+    .side { width: 270px; flex-shrink: 0; background: var(--panel); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow-y: auto; }
+    .side h3 { font-size: 10px; letter-spacing: 2px; color: var(--green); padding: 10px 12px 6px;
+      border-bottom: 1px solid var(--border); text-transform: uppercase; }
+
+    .line-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
+      font-size: 11px; letter-spacing: 1px; border-bottom: 1px solid var(--green-faint); }
+    .line-row:hover { background: var(--green-faint); }
+    .line-row.off { opacity: 0.32; }
+    .line-badge { flex-shrink: 0; filter: drop-shadow(0 0 3px rgba(0,255,136,0.25)); }
+    .line-name { flex: 1; color: var(--green-dim); text-transform: uppercase; }
+    .line-row.off .line-name { color: var(--green-dim); }
+    .line-count { color: var(--green); font-size: 14px; min-width: 22px; text-align: right; }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); margin: 10px 0; }
+    .stat { background: var(--panel); padding: 8px 10px; }
+    .stat label { display: block; font-size: 8px; letter-spacing: 1.5px; color: var(--green-dim); }
+    .stat b { font-size: 19px; color: var(--green); font-weight: 400; }
+    .stat b.warn { color: #ffaa00; }
+
+    .feed { flex: 1; padding: 4px 0; }
+    .feed-item { font-size: 9px; padding: 3px 12px; color: var(--green-dim); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent; }
+    .feed-item b { color: var(--green); font-weight: 400; }
+
+    .bottombar { border-top: 1px solid var(--border); padding: 6px 14px; display: flex;
+      justify-content: space-between; font-size: 9px; color: var(--green-dim); letter-spacing: 2px; flex-shrink: 0; }
+
+    /* Train marker: a heading-rotated chevron in the line color. */
+    .train-ico { transform-origin: center; }
+    .train-ico .blip { animation: ping 2s ease-out infinite; }
+    @keyframes ping { 0%{r:0;opacity:.7} 100%{r:14;opacity:0} }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #06140e; color: var(--green);
+      border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono); }
+    .leaflet-popup-content { font-size: 11px; line-height: 1.5; margin: 8px 10px; }
+    .pop-t { font-size: 12px; letter-spacing: 1px; color: var(--green); }
+    .pop-sub { color: var(--green-dim); font-size: 10px; }
+    .pop-tag { color: #ffaa00; }
+    .station-dot { background: transparent; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-title">CTA <span>//</span> CHICAGO TRANSIT — LIVE TRACK GRID</div>
+    <div class="topbar-meta">
+      <span><span class="pulse" id="pulse"></span><b id="feed-state">CONNECTING</b></span>
+      <span>TRAINS <b id="m-trains">--</b></span>
+      <span>LINES <b id="m-lines">--</b></span>
+      <span>NEXT POLL <b id="m-next">--</b>s</span>
+      <span>UTC <b id="clk">--:--:--</b></span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div id="map"></div>
+    <div class="side">
+      <h3>Lines / Active Trains</h3>
+      <div id="line-list"></div>
+      <div class="stat-grid">
+        <div class="stat"><label>TOTAL TRAINS</label><b id="s-trains">--</b></div>
+        <div class="stat"><label>APPROACHING</label><b id="s-app">--</b></div>
+        <div class="stat"><label>DELAYED</label><b id="s-dly" class="warn">--</b></div>
+        <div class="stat"><label>LAST FEED</label><b id="s-age">--</b></div>
+      </div>
+      <h3>Arrivals Feed</h3>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <span><span class="pulse" id="pulse2"></span><span id="b-state">FEED NOMINAL</span></span>
+    <span>SECTOR // COOK COUNTY</span>
+    <span>UNCLASSIFIED // PUBLIC TRANSIT</span>
+  </div>
+
+  <script src="ctaData.js"></script>
+  <script>
+  // --- Line configuration: maps CTA route codes to display + color. ---
+  const LINES = {
+    red:  { code: 'red',  name: 'Red',    color: '#ff2a2a', icon: 'images/RED.svg'  },
+    blue: { code: 'blue', name: 'Blue',   color: '#3399ff', icon: 'images/BLUE.svg' },
+    brn:  { code: 'brn',  name: 'Brown',  color: '#c0692f', icon: 'images/BRN.svg'  },
+    g:    { code: 'g',    name: 'Green',  color: '#00cc44', icon: 'images/G.svg'    },
+    org:  { code: 'org',  name: 'Orange', color: '#ff8800', icon: 'images/O.svg'    },
+    p:    { code: 'p',    name: 'Purple', color: '#a64dff', icon: 'images/P.svg'    },
+    pink: { code: 'pink', name: 'Pink',   color: '#ff55aa', icon: 'images/Pnk.svg'  },
+    y:    { code: 'y',    name: 'Yellow', color: '#ffcc00', icon: 'images/Y.svg'    },
+  };
+  const POLL_MS = 30_000;            // CTA positions refresh ~every minute; 30s is respectful.
+  const active = new Set(Object.keys(LINES));   // toggled on/off via the sidebar.
+
+  // --- Map setup ---
+  const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([41.86, -87.66], 11);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const trainLayer = L.layerGroup().addTo(map);
+  const stationLayer = L.layerGroup().addTo(map);
+
+  // --- Station dots from ctaData.js (dedupe by MAP_ID) ---
+  (function plotStations() {
+    const seen = new Set();
+    for (const s of (window.ctaStops || [])) {
+      if (seen.has(s.MAP_ID)) continue;
+      seen.add(s.MAP_ID);
+      const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
+      if (!m) continue;
+      L.circleMarker([+m[1], +m[2]], {
+        radius: 2.5, color: 'rgba(0,255,136,0.55)', weight: 1,
+        fillColor: '#03150d', fillOpacity: 1,
+      }).bindTooltip(s.STATION_DESCRIPTIVE_NAME, { direction: 'top', opacity: 0.9 })
+        .addTo(stationLayer);
+    }
+  })();
+
+  // --- Build the train chevron icon (rotated to heading) ---
+  function trainIcon(color, heading, delayed) {
+    const h = (parseInt(heading, 10) || 0);
+    return L.divIcon({
+      className: 'train-ico',
+      iconSize: [26, 26], iconAnchor: [13, 13],
+      html: `<svg width="26" height="26" viewBox="0 0 26 26" style="transform:rotate(${h}deg)">
+        <circle class="blip" cx="13" cy="13" r="6" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="M13 3 L20 21 L13 16 L6 21 Z" fill="${color}"
+          stroke="${delayed ? '#ffaa00' : '#02100a'}" stroke-width="${delayed ? 1.6 : 1}"/>
+      </svg>`,
+    });
+  }
+
+  // CTA returns single items as objects, arrays when many — normalize to array.
+  const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+
+  function minsUntil(arrT) {
+    // arrT like "2024-06-03T20:41:33" (local Chicago time, no tz). Compare loosely.
+    const t = Date.parse(arrT);
+    if (isNaN(t)) return null;
+    return Math.round((t - Date.now()) / 60000);
+  }
+
+  // --- The poll loop ---
+  let nextPoll = POLL_MS / 1000;
+  let lastFeedTime = null;
+
+  async function refresh() {
+    const rts = [...active].map(k => LINES[k].code).join(',');
+    if (!rts) { trainLayer.clearLayers(); renderStats([], null); return; }
+
+    let data;
+    try {
+      const res = await fetch(`/api/positions?rt=${rts}`);
+      data = await res.json();
+    } catch (e) {
+      setFeedState('LINK LOST', 'dead');
+      return;
+    }
+    const ctatt = data.ctatt || {};
+    if (ctatt.errCd && ctatt.errCd !== '0') {
+      setFeedState('API ERR ' + ctatt.errCd, 'dead');
+      return;
+    }
+    lastFeedTime = ctatt.tmst || null;
+
+    const trains = [];
+    for (const route of arr(ctatt.route)) {
+      const key = String(route['@name'] || route.name || '').toLowerCase();
+      const cfg = LINES[key] || { color: '#00ff88', name: key.toUpperCase() };
+      for (const t of arr(route.train)) {
+        trains.push({ ...t, lineKey: key, color: cfg.color, lineName: cfg.name, icon: cfg.icon });
+      }
+    }
+
+    trainLayer.clearLayers();
+    for (const t of trains) {
+      if (!t.lat || !t.lon) continue;
+      const delayed = t.isDly === '1';
+      const app = t.isApp === '1';
+      const eta = minsUntil(t.arrT);
+      const etaTxt = eta == null ? '—' : app ? 'DUE' : eta <= 0 ? 'DUE' : eta + ' min';
+      L.marker([+t.lat, +t.lon], { icon: trainIcon(t.color, t.heading, delayed) })
+        .bindPopup(
+          `<div class="pop-t">` +
+          (t.icon ? `<img src="${t.icon}" width="16" height="16" style="vertical-align:-3px;margin-right:5px">` : '') +
+          `RUN ${t.rn} · ${t.lineName.toUpperCase()}</div>` +
+          `<div class="pop-sub">→ ${t.destNm || '—'}</div>` +
+          `<div class="pop-sub">NEXT: ${t.nextStaNm || '—'} · <b>${etaTxt}</b></div>` +
+          (delayed ? `<div class="pop-tag">⚠ DELAYED</div>` : '') +
+          (app && !delayed ? `<div class="pop-tag">● APPROACHING</div>` : '')
+        )
+        .addTo(trainLayer);
+    }
+
+    renderStats(trains, ctatt.tmst);
+    renderFeed(trains);
+    setFeedState('FEED NOMINAL', 'ok');
+    nextPoll = POLL_MS / 1000;
+  }
+
+  function renderStats(trains, tmst) {
+    const byLine = {};
+    let app = 0, dly = 0;
+    for (const t of trains) {
+      byLine[t.lineKey] = (byLine[t.lineKey] || 0) + 1;
+      if (t.isApp === '1') app++;
+      if (t.isDly === '1') dly++;
+    }
+    document.getElementById('s-trains').textContent = trains.length;
+    document.getElementById('m-trains').textContent = trains.length;
+    document.getElementById('s-app').textContent = app;
+    document.getElementById('s-dly').textContent = dly;
+    document.getElementById('m-lines').textContent =
+      `${Object.keys(byLine).length}/${active.size}`;
+    document.getElementById('s-age').textContent = tmst ? tmst.slice(11, 16) : '--';
+
+    for (const key of Object.keys(LINES)) {
+      const el = document.getElementById('cnt-' + key);
+      if (el) el.textContent = byLine[key] || 0;
+    }
+  }
+
+  function renderFeed(trains) {
+    // Show the soonest arrivals across all active trains.
+    const rows = trains
+      .map(t => ({ t, eta: minsUntil(t.arrT) }))
+      .filter(r => r.eta != null)
+      .sort((a, b) => a.eta - b.eta)
+      .slice(0, 14);
+    const feed = document.getElementById('feed');
+    feed.innerHTML = rows.map(({ t, eta }) => {
+      const m = t.isApp === '1' || eta <= 0 ? 'DUE' : eta + 'm';
+      return `<div class="feed-item" style="border-left-color:${t.color}">` +
+        `<b>${m}</b> ${t.nextStaNm || '—'} <span style="color:${t.color}">·</span> →${t.destNm || ''}` +
+        (t.isDly === '1' ? ' <span class="pop-tag">⚠</span>' : '') + `</div>`;
+    }).join('') || '<div class="feed-item">no active trains</div>';
+  }
+
+  function setFeedState(txt, kind) {
+    document.getElementById('feed-state').textContent = txt;
+    document.getElementById('b-state').textContent = txt;
+    const cls = kind === 'ok' ? '' : kind === 'dead' ? 'dead' : 'stale';
+    document.getElementById('pulse').className = 'pulse ' + cls;
+    document.getElementById('pulse2').className = 'pulse ' + cls;
+  }
+
+  // --- Sidebar line toggles ---
+  function buildLineList() {
+    const host = document.getElementById('line-list');
+    host.innerHTML = Object.entries(LINES).map(([key, c]) =>
+      `<div class="line-row" data-key="${key}">
+         <img class="line-badge" src="${c.icon}" width="18" height="18" alt="${c.name}">
+         <div class="line-name">${c.name}</div>
+         <div class="line-count" id="cnt-${key}">0</div>
+       </div>`).join('');
+    host.querySelectorAll('.line-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const key = row.dataset.key;
+        if (active.has(key)) { active.delete(key); row.classList.add('off'); }
+        else { active.add(key); row.classList.remove('off'); }
+        refresh();
+      });
+    });
+  }
+
+  // --- Clocks & countdown ---
+  function tick() {
+    const n = new Date();
+    document.getElementById('clk').textContent =
+      [n.getUTCHours(), n.getUTCMinutes(), n.getUTCSeconds()].map(v => String(v).padStart(2, '0')).join(':');
+    nextPoll = Math.max(0, nextPoll - 1);
+    document.getElementById('m-next').textContent = nextPoll;
+  }
+
+  // --- Boot ---
+  buildLineList();
+  refresh();
+  setInterval(tick, 1000);
+  setInterval(refresh, POLL_MS);
+  </script>
+</body>
+</html>

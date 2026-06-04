@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>CTA Train Tracker</title>
+
+    <link rel="shortcut icon" type="image/x-icon" href="docs/images/favicon.ico" />
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <style>
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+        }
+
+        .leaflet-container {
+            height: 982px;
+            width: 1512px;
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+
+
+</head>
+
+<body>
+
+
+    <div id="map" style="width: 1512px; height: 982px;"></div>
+    <script src="ctaData.js"></script>
+    <script src="script.js"></script>
+
+    <script>
+        // 41.876335, -87.626095
+        // Clark/Lake Station - (41.885737, -87.630886)
+        const ctaData = ctaStops;
+
+        const map = L.map('map').setView([41.876335, -87.626095], 13);
+
+        const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+
+        const stationArray = ctaStops.map(station => {
+
+            const coords = station.Location.replace(/[()]/g, '').split(', ');
+            return {
+                name: station.STATION_DESCRIPTIVE_NAME,
+                lineColor: station.STATION_DESCRIPTIVE_NAME.replace(/[()]/g, '  ').split('  ')[1],
+                lat: parseFloat(coords[0]),
+                lon: parseFloat(coords[1])
+            };
+        });
+        // const marker = L.marker([41.885737, -87.630886]).addTo(map)
+        // 	.bindPopup('<b>Clark/Lake Station</b><br />ETA:').openPopup();
+        stationArray.forEach(station => {
+
+            var lineIcon = L.icon({
+                iconUrl: `images/station.svg`,
+                iconSize: [38, 95],
+                iconAnchor: [22, 94],
+                popupAnchor: [-3, -76]
+            });
+
+            L.marker([station.lat, station.lon], { icon: lineIcon }).addTo(map)
+                .bindPopup(`<b>${station.name}</b><br /> Line: ${station.lineColor}`);
+        });
+
+        // Fetch train data every 60 seconds
+        setInterval(async () => {
+            let trainData = await gettrainData();
+            console.log(trainData);
+            trainData.ctatt.route.forEach(train => {
+                const lat = train.lat;
+                const lon = train.lon;
+                var trainIcon = L.icon({
+                    iconUrl: `images/RED.svg`,
+                    iconSize: [38, 95],
+                    iconAnchor: [22, 94],
+                    popupAnchor: [-3, -76]
+                });
+
+                L.marker([lat, lon], { icon: trainIcon }).addTo(map)
+                    .bindPopup(`<b>Train ID: ${train.TrainID}</b><br /> Line: Red <br /> Destination: ${train.destNm}`);
+            });
+        }, 60000);
+
+    </script>
+
+
+</body>
+
+</html>

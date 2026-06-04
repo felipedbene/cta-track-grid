@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cta-track-grid",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-01",
+
+  // Serve the monitor frontend (public/) straight from the edge.
+  // Asset paths are served before the Worker runs; only non-asset
+  // paths (e.g. /api/*) invoke src/index.js.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  // Position history store (see migrations/0001_init.sql).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cta_history",
+      "database_id": "ce905855-559f-45df-9d66-a4f767f22b32"
+    }
+  ],
+
+  // Capture positions every minute; purge >30d snapshots nightly at 04:00 UTC.
+  "triggers": {
+    "crons": ["* * * * *", "0 4 * * *"]
+  }
+
+  // CTA_KEY is a secret, set with: wrangler secret put CTA_KEY
+  // For local dev, put it in .dev.vars instead.
+}

@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CTA // TRACK GRID — REALTIME</title>
+  <link rel="shortcut icon" type="image/x-icon" href="images/favicon.ico">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+    :root {
+      --bg: #01060b; --panel: #040b10; --green: #00ffaa;
+      --green-dim: rgba(0,255,170,0.45); --green-faint: rgba(0,255,170,0.07);
+      --border: rgba(0,255,170,0.2); --mono: 'Share Tech Mono','Courier New',monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); font-family: var(--mono); color: var(--green-dim); }
+    body { display: flex; flex-direction: column; }
+
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border); padding: 8px 14px; flex-shrink: 0; }
+    .topbar-title { font-size: 13px; letter-spacing: 4px; color: var(--green); }
+    .topbar-title span { color: #ffaa00; }
+    .topbar-meta { font-size: 10px; color: var(--green-dim); display: flex; gap: 18px; }
+    .topbar-meta b { color: var(--green); font-weight: 400; }
+    .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+      animation: blink 1.3s ease-in-out infinite; vertical-align: middle; margin-right: 5px; }
+    .pulse.stale { background: #ffaa00; }
+    .pulse.dead { background: #ff2222; animation: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.15} }
+
+    .stage { flex: 1; display: flex; min-height: 0; }
+    .map-wrap { flex: 1; position: relative; min-width: 0; }
+    #map { position: absolute; inset: 0; background: #01040a; }
+    .leaflet-container { background: #01040a; }
+    /* NORAD big-board: a near-black board where only the structure glows.
+       dark_matter tiles are grayscale-dark; sepia+hue-rotate tints the faint
+       streets toward cyan-green, and we crush brightness so the city reads as a
+       glowing vector outline rather than a street map. */
+    .leaflet-tile-pane {
+      filter: brightness(1.3) contrast(1.5) sepia(0.92) hue-rotate(108deg) saturate(3.6);
+    }
+    /* Soft neon glow on all vector overlays (station dots). */
+    .leaflet-overlay-pane { filter: drop-shadow(0 0 2px rgba(0,255,170,0.75)); }
+    /* CRT vignette + scanlines layered over the board. */
+    .crt-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 650;
+      background:
+        radial-gradient(ellipse at center, transparent 48%, rgba(0,0,0,0.65) 100%),
+        repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,10,8,0.16) 2px 3px); }
+
+    .side { width: 270px; flex-shrink: 0; background: var(--panel); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow-y: auto; }
+    .side h3 { font-size: 10px; letter-spacing: 2px; color: var(--green); padding: 10px 12px 6px;
+      border-bottom: 1px solid var(--border); text-transform: uppercase; }
+
+    .line-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
+      font-size: 11px; letter-spacing: 1px; border-bottom: 1px solid var(--green-faint); }
+    .line-row:hover { background: var(--green-faint); }
+    .line-row.off { opacity: 0.32; }
+    .line-badge { flex-shrink: 0; filter: drop-shadow(0 0 3px rgba(0,255,136,0.25)); }
+    .line-name { flex: 1; color: var(--green-dim); text-transform: uppercase; }
+    .line-row.off .line-name { color: var(--green-dim); }
+    .line-count { color: var(--green); font-size: 14px; min-width: 22px; text-align: right; }
+    .metra-note { font-size: 8px; letter-spacing: 1px; color: rgba(150,180,255,0.5);
+      padding: 5px 12px; border-bottom: 1px solid var(--green-faint); }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); margin: 10px 0; }
+    .stat { background: var(--panel); padding: 8px 10px; }
+    .stat label { display: block; font-size: 8px; letter-spacing: 1.5px; color: var(--green-dim); }
+    .stat b { font-size: 19px; color: var(--green); font-weight: 400; }
+    .stat b.warn { color: #ffaa00; }
+
+    .feed { flex: 1; padding: 4px 0; }
+    .feed-item { font-size: 9px; padding: 3px 12px; color: var(--green-dim); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent; }
+    .feed-item b { color: var(--green); font-weight: 400; }
+
+    .bottombar { border-top: 1px solid var(--border); padding: 6px 14px; display: flex;
+      justify-content: space-between; font-size: 9px; color: var(--green-dim); letter-spacing: 2px; flex-shrink: 0; }
+
+    /* Train marker: a heading-rotated chevron in the line color. */
+    .train-ico { transform-origin: center; }
+    .train-ico .blip { animation: ping 2s ease-out infinite; }
+    @keyframes ping { 0%{r:0;opacity:.7} 100%{r:14;opacity:0} }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #06140e; color: var(--green);
+      border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono); }
+    .leaflet-popup-content { font-size: 11px; line-height: 1.5; margin: 8px 10px; }
+    .pop-t { font-size: 12px; letter-spacing: 1px; color: var(--green); }
+    .pop-sub { color: var(--green-dim); font-size: 10px; }
+    .pop-tag { color: #ffaa00; }
+    .station-dot { background: transparent; }
+
+    /* Home (Kedzie) star + panels */
+    .side h3 { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .alert-btn { font-family: var(--mono); font-size: 8px; letter-spacing: 1px; cursor: pointer;
+      background: var(--green-faint); color: var(--green); border: 1px solid var(--border);
+      border-radius: 2px; padding: 3px 6px; text-transform: uppercase; white-space: nowrap; }
+    .alert-btn:hover { background: rgba(0,255,136,0.15); }
+    .alert-btn.on { color: #ffcc00; border-color: rgba(255,204,0,0.45); }
+    .home-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 12px; font-size: 10px;
+      border-bottom: 1px solid var(--green-faint); }
+    .home-row .eta { color: var(--green); font-size: 15px; min-width: 44px; }
+    .home-row .eta.due { color: #ffcc00; }
+    .home-row .dir { flex: 1; color: var(--green-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .alerts { padding: 2px 0; }
+    .alert-item { font-size: 9px; padding: 5px 12px; border-left: 2px solid #ffaa00; color: var(--green-dim);
+      border-bottom: 1px solid var(--green-faint); line-height: 1.4; }
+    .alert-item b { color: #ffcc00; font-weight: 400; display: block; font-size: 10px; margin-bottom: 2px; }
+    .alert-none { font-size: 9px; padding: 6px 12px; color: var(--green-dim); }
+    /* NORAD landmark markers: glowing ring + uppercase callout label */
+    .landmark { overflow: visible; }
+    .lm-ring { width: 8px; height: 8px; border: 1px solid #00ffcc; border-radius: 50%;
+      box-shadow: 0 0 7px #00ffcc; position: relative; }
+    .lm-ring::after { content: ''; position: absolute; inset: 2px; background: #00ffcc; border-radius: 50%; }
+    .lm-label { position: absolute; left: 12px; top: -3px; white-space: nowrap; font-size: 8px;
+      letter-spacing: 1.5px; color: #00ffcc; text-shadow: 0 0 5px rgba(0,255,204,0.9); text-transform: uppercase; }
+    .landmark.water .lm-label { left: 0; color: rgba(0,200,255,0.55); text-shadow: 0 0 6px rgba(0,160,255,0.5);
+      font-size: 9px; letter-spacing: 4px; }
+    /* Suburban landmarks: steel-blue, dimmer — tied to the Metra regional layer. */
+    .landmark.burb .lm-ring { width: 6px; height: 6px; border-color: rgba(150,180,255,0.7);
+      box-shadow: 0 0 5px rgba(150,180,255,0.55); }
+    .landmark.burb .lm-ring::after { background: rgba(150,180,255,0.85); }
+    .landmark.burb .lm-label { left: 10px; color: rgba(150,180,255,0.6);
+      text-shadow: 0 0 4px rgba(120,150,220,0.55); font-size: 7px; }
+    .home-star svg { filter: drop-shadow(0 0 6px #ffcc00); animation: starpulse 2s ease-in-out infinite; }
+    @keyframes starpulse { 0%,100%{ filter: drop-shadow(0 0 4px #ffcc00) } 50%{ filter: drop-shadow(0 0 10px #ffcc00) } }
+    .replay-link { color: var(--green); text-decoration: none; letter-spacing: 2px; }
+    .replay-link:hover { color: #ffcc00; }
+
+    /* --- Mobile: let the whole page scroll naturally (no 100vh app-shell,
+           which made the tall sidebar overflow and collide with the footer). --- */
+    @media (max-width: 720px) {
+      html, body { height: auto; min-height: 100%; }
+      body { display: block; }
+      .stage { display: block; }
+      .map-wrap { height: 55vh; }
+      .side { width: 100%; overflow: visible; border-left: none; border-top: 1px solid var(--border); }
+      .topbar { flex-wrap: wrap; gap: 5px 12px; padding: 7px 10px; }
+      .topbar-title { font-size: 11px; letter-spacing: 2px; flex-basis: 100%; }
+      .topbar-meta { gap: 12px; font-size: 9px; flex-wrap: wrap; }
+      .bottombar { flex-wrap: wrap; gap: 4px 14px; font-size: 8px; justify-content: flex-start; }
+      .stat b { font-size: 17px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-title">CTA <span>//</span> CHICAGO TRANSIT — LIVE TRACK GRID</div>
+    <div class="topbar-meta">
+      <span><span class="pulse" id="pulse"></span><b id="feed-state">CONNECTING</b></span>
+      <span>TRAINS <b id="m-trains">--</b></span>
+      <span>LINES <b id="m-lines">--</b></span>
+      <span>NEXT POLL <b id="m-next">--</b>s</span>
+      <span>UTC <b id="clk">--:--:--</b></span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="map-wrap">
+      <div id="map"></div>
+      <div class="crt-overlay"></div>
+    </div>
+    <div class="side">
+      <h3>Lines / Active Trains</h3>
+      <div id="line-list"></div>
+      <div class="metra-note">╌╌ Metra regional rail (geometry)</div>
+      <div class="stat-grid">
+        <div class="stat"><label>TOTAL TRAINS</label><b id="s-trains">--</b></div>
+        <div class="stat"><label>APPROACHING</label><b id="s-app">--</b></div>
+        <div class="stat"><label>DELAYED</label><b id="s-dly" class="warn">--</b></div>
+        <div class="stat"><label>LAST FEED</label><b id="s-age">--</b></div>
+      </div>
+      <h3>★ Home · Kedzie
+        <button id="alert-btn" class="alert-btn">🔔 Enable alerts</button>
+      </h3>
+      <div id="home-arrivals"></div>
+      <h3>Green Line Alerts</h3>
+      <div class="alerts" id="alerts-panel"></div>
+      <h3>System Arrivals Feed</h3>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <span><span class="pulse" id="pulse2"></span><span id="b-state">FEED NOMINAL</span></span>
+    <span><a class="replay-link" href="/replay">▸ REPLAY (30D)</a></span>
+    <span>UNCLASSIFIED // PUBLIC TRANSIT</span>
+  </div>
+
+  <script src="ctaData.js"></script>
+  <script>
+  // --- Line configuration: maps CTA route codes to display + color. ---
+  const LINES = {
+    red:  { code: 'red',  name: 'Red',    color: '#ff2a2a', icon: 'images/RED.svg'  },
+    blue: { code: 'blue', name: 'Blue',   color: '#3399ff', icon: 'images/BLUE.svg' },
+    brn:  { code: 'brn',  name: 'Brown',  color: '#c0692f', icon: 'images/BRN.svg'  },
+    g:    { code: 'g',    name: 'Green',  color: '#00cc44', icon: 'images/G.svg'    },
+    org:  { code: 'org',  name: 'Orange', color: '#ff8800', icon: 'images/O.svg'    },
+    p:    { code: 'p',    name: 'Purple', color: '#a64dff', icon: 'images/P.svg'    },
+    pink: { code: 'pink', name: 'Pink',   color: '#ff55aa', icon: 'images/Pnk.svg'  },
+    y:    { code: 'y',    name: 'Yellow', color: '#ffcc00', icon: 'images/Y.svg'    },
+  };
+  const POLL_MS = 30_000;            // CTA positions refresh ~every minute; 30s is respectful.
+  const active = new Set(Object.keys(LINES));   // toggled on/off via the sidebar.
+
+  // --- Map setup ---
+  const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([41.86, -87.66], 11);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19, subdomains: 'abcd',
+  }).addTo(map);
+
+  // --- Glowing L-line geometry (GTFS) on a pane beneath stations/trains ---
+  map.createPane('lines');
+  const linePane = map.getPane('lines');
+  linePane.style.zIndex = 250;                                  // above tiles(200), below overlay/markers
+  linePane.style.filter = 'drop-shadow(0 0 3px rgba(0,255,170,0.5))';
+  fetch('lines.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'lines',
+      style: (f) => ({ color: f.properties.color, weight: 3, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }),
+    }).addTo(map);
+  }).catch(() => {});
+
+  // --- Metra regional rail (static GTFS): dim + dashed, beneath the CTA 'L' ---
+  map.createPane('metra');
+  const metraPane = map.getPane('metra');
+  metraPane.style.zIndex = 240;
+  metraPane.style.filter = 'drop-shadow(0 0 2px rgba(150,180,255,0.35))';
+  fetch('metra.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'metra',
+      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.5, dashArray: '3 5', lineCap: 'round' }),
+    }).addTo(map);
+  }).catch(() => {});
+
+  const trainLayer = L.layerGroup().addTo(map);
+  const stationLayer = L.layerGroup().addTo(map);
+
+  // --- Station dots from ctaData.js (dedupe by MAP_ID) ---
+  (function plotStations() {
+    const seen = new Set();
+    for (const s of (window.ctaStops || [])) {
+      if (seen.has(s.MAP_ID)) continue;
+      seen.add(s.MAP_ID);
+      const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
+      if (!m) continue;
+      L.circleMarker([+m[1], +m[2]], {
+        radius: 2.2, color: '#00ffaa', weight: 1, opacity: 0.85,
+        fillColor: '#00ffaa', fillOpacity: 0.3,
+      }).bindTooltip(s.STATION_DESCRIPTIVE_NAME, { direction: 'top', opacity: 0.9 })
+        .addTo(stationLayer);
+    }
+  })();
+
+  // --- Home station (Green Line Kedzie) + gold star ---
+  const HOME = { mapid: '41070', lat: 41.884321, lon: -87.706155, line: 'g', route: 'G', threshold: 6 };
+  L.marker([HOME.lat, HOME.lon], {
+    zIndexOffset: 1000,
+    icon: L.divIcon({
+      className: 'home-star', iconSize: [32, 32], iconAnchor: [16, 16],
+      html: `<svg width="32" height="32" viewBox="0 0 24 24">
+        <path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.7 7-6.3-3.8-6.3 3.8 1.7-7-5.4-4.7 7.1-.6z"
+          fill="#ffcc00" stroke="#050d0a" stroke-width="1"/></svg>`,
+    }),
+  }).addTo(map).bindPopup('<div class="pop-t">★ HOME · KEDZIE (GREEN)</div><div class="pop-sub">Lake St & Kedzie</div>');
+
+  // --- NORAD landmark callouts ---
+  const LANDMARKS = [
+    // City core
+    { name: 'The Loop', lat: 41.8786, lon: -87.6298 },
+    { name: "O'Hare · ORD", lat: 41.9786, lon: -87.9047 },
+    { name: 'Midway · MDW', lat: 41.7868, lon: -87.7522 },
+    { name: 'Navy Pier', lat: 41.8917, lon: -87.6086 },
+    { name: 'Lake Michigan', lat: 41.93, lon: -87.58, water: true },
+    // Suburbs (Metra reach) — orient the regional view
+    { name: 'Evanston', lat: 42.045, lon: -87.690, burb: true },
+    { name: 'Oak Park', lat: 41.888, lon: -87.788, burb: true },
+    { name: 'Skokie', lat: 42.036, lon: -87.740, burb: true },
+    { name: 'Naperville', lat: 41.748, lon: -88.165, burb: true },
+    { name: 'Aurora', lat: 41.761, lon: -88.315, burb: true },
+    { name: 'Joliet', lat: 41.525, lon: -88.082, burb: true },
+    { name: 'Elgin', lat: 42.037, lon: -88.281, burb: true },
+    { name: 'Waukegan', lat: 42.363, lon: -87.845, burb: true },
+    { name: 'Arlington Hts', lat: 42.088, lon: -87.981, burb: true },
+    { name: 'Schaumburg', lat: 42.034, lon: -88.083, burb: true },
+    { name: 'Geneva', lat: 41.888, lon: -88.305, burb: true },
+    { name: 'Blue Island', lat: 41.657, lon: -87.680, burb: true },
+    { name: 'Univ Park', lat: 41.445, lon: -87.717, burb: true },
+    { name: 'Tinley Park', lat: 41.573, lon: -87.784, burb: true },
+    { name: 'Lake Forest', lat: 42.259, lon: -87.840, burb: true },
+    { name: 'Fox Lake', lat: 42.396, lon: -88.183, burb: true },
+    { name: 'Kenosha, WI', lat: 42.585, lon: -87.821, burb: true },
+  ];
+  for (const lm of LANDMARKS) {
+    L.marker([lm.lat, lm.lon], {
+      interactive: false, zIndexOffset: 500,
+      icon: L.divIcon({
+        className: 'landmark' + (lm.water ? ' water' : lm.burb ? ' burb' : ''), iconSize: [8, 8], iconAnchor: [4, 4],
+        html: (lm.water ? '' : '<div class="lm-ring"></div>') + `<div class="lm-label">${lm.name}</div>`,
+      }),
+    }).addTo(map);
+  }
+
+  // --- Alert engine state ---
+  let alertsOn = false;
+  const notified = { approach: new Set(), delay: new Set(), alert: new Set() };
+
+  // Notify for keys newly present since last cycle; reset tracking to current set
+  // so a condition that clears and returns later fires again (no permanent suppression).
+  function reconcile(set, currentKeys, onNew) {
+    for (const k of currentKeys) if (!set.has(k)) onNew(k);
+    set.clear();
+    for (const k of currentKeys) set.add(k);
+  }
+  function notify(title, body, tag) {
+    if (alertsOn && 'Notification' in window && Notification.permission === 'granted') {
+      try { new Notification(title, { body, tag, icon: 'images/G.svg' }); } catch (e) {}
+    }
+  }
+  function enableAlerts() {
+    const btn = document.getElementById('alert-btn');
+    if (!('Notification' in window)) { btn.textContent = 'unsupported'; return; }
+    Notification.requestPermission().then(p => {
+      alertsOn = p === 'granted';
+      btn.classList.toggle('on', alertsOn);
+      btn.textContent = alertsOn ? '🔔 Alerts ON' : '🔔 blocked';
+      if (alertsOn) notify('CTA Track Grid', 'Kedzie alerts enabled — watching Green Line.');
+    });
+  }
+
+  // --- Build the train chevron icon (rotated to heading) ---
+  function trainIcon(color, heading, delayed) {
+    const h = (parseInt(heading, 10) || 0);
+    return L.divIcon({
+      className: 'train-ico',
+      iconSize: [28, 28], iconAnchor: [14, 14],
+      html: `<svg width="28" height="28" viewBox="0 0 28 28"
+        style="transform:rotate(${h}deg);filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 7px ${color})">
+        <circle class="blip" cx="14" cy="14" r="6" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="M14 3 L21 23 L14 17.5 L7 23 Z" fill="${color}"
+          stroke="${delayed ? '#ffcc00' : '#ffffff'}" stroke-width="${delayed ? 1.8 : 0.8}"/>
+      </svg>`,
+    });
+  }
+
+  // CTA returns single items as objects, arrays when many — normalize to array.
+  const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+
+  function minsUntil(arrT) {
+    // arrT like "2024-06-03T20:41:33" (local Chicago time, no tz). Compare loosely.
+    const t = Date.parse(arrT);
+    if (isNaN(t)) return null;
+    return Math.round((t - Date.now()) / 60000);
+  }
+
+  // --- The poll loop ---
+  let nextPoll = POLL_MS / 1000;
+  let lastFeedTime = null;
+
+  async function refresh() {
+    const rts = [...active].map(k => LINES[k].code).join(',');
+    if (!rts) { trainLayer.clearLayers(); renderStats([], null); return; }
+
+    let data;
+    try {
+      const res = await fetch(`/api/positions?rt=${rts}`);
+      data = await res.json();
+    } catch (e) {
+      setFeedState('LINK LOST', 'dead');
+      return;
+    }
+    const ctatt = data.ctatt || {};
+    if (ctatt.errCd && ctatt.errCd !== '0') {
+      setFeedState('API ERR ' + ctatt.errCd, 'dead');
+      return;
+    }
+    lastFeedTime = ctatt.tmst || null;
+
+    const trains = [];
+    for (const route of arr(ctatt.route)) {
+      const key = String(route['@name'] || route.name || '').toLowerCase();
+      const cfg = LINES[key] || { color: '#00ff88', name: key.toUpperCase() };
+      for (const t of arr(route.train)) {
+        trains.push({ ...t, lineKey: key, color: cfg.color, lineName: cfg.name, icon: cfg.icon });
+      }
+    }
+
+    trainLayer.clearLayers();
+    for (const t of trains) {
+      if (!t.lat || !t.lon) continue;
+      const delayed = t.isDly === '1';
+      const app = t.isApp === '1';
+      const eta = minsUntil(t.arrT);
+      const etaTxt = eta == null ? '—' : app ? 'DUE' : eta <= 0 ? 'DUE' : eta + ' min';
+      L.marker([+t.lat, +t.lon], { icon: trainIcon(t.color, t.heading, delayed) })
+        .bindPopup(
+          `<div class="pop-t">` +
+          (t.icon ? `<img src="${t.icon}" width="16" height="16" style="vertical-align:-3px;margin-right:5px">` : '') +
+          `RUN ${t.rn} · ${t.lineName.toUpperCase()}</div>` +
+          `<div class="pop-sub">→ ${t.destNm || '—'}</div>` +
+          `<div class="pop-sub">NEXT: ${t.nextStaNm || '—'} · <b>${etaTxt}</b></div>` +
+          (delayed ? `<div class="pop-tag">⚠ DELAYED</div>` : '') +
+          (app && !delayed ? `<div class="pop-tag">● APPROACHING</div>` : '')
+        )
+        .addTo(trainLayer);
+    }
+
+    renderStats(trains, ctatt.tmst);
+    renderFeed(trains);
+
+    // Trigger 2: Green Line delays (from positions we already have).
+    const greenDelayed = trains.filter(t => t.lineKey === 'g' && t.isDly === '1').map(t => t.rn);
+    reconcile(notified.delay, greenDelayed, rn => notify('⚠ Green Line delay', `Run ${rn} reporting delay`, 'g-dly-' + rn));
+
+    setFeedState('FEED NOMINAL', 'ok');
+    nextPoll = POLL_MS / 1000;
+  }
+
+  // --- Home arrivals at Kedzie + Trigger 1 (approaching) ---
+  async function refreshHome() {
+    let etas;
+    try {
+      const data = await (await fetch(`/api/arrivals?mapid=${HOME.mapid}&rt=${HOME.line}`)).json();
+      etas = arr(data.ctatt?.eta);
+    } catch (e) { return; }
+
+    const host = document.getElementById('home-arrivals');
+    if (!etas.length) { host.innerHTML = '<div class="alert-none">no upcoming Green Line trains</div>'; }
+    else {
+      host.innerHTML = etas.slice(0, 6).map(e => {
+        const m = minsUntil(e.arrT);
+        const due = e.isApp === '1' || (m != null && m <= 1);
+        const txt = due ? 'DUE' : (m != null ? m + ' min' : '--');
+        const dir = (e.stpDe || '').replace(/^Service toward\s*/i, '→ ') || ('→ ' + (e.destNm || ''));
+        return `<div class="home-row"><span class="eta ${due ? 'due' : ''}">${txt}</span>` +
+          `<span class="dir">${dir}</span>` + (e.isDly === '1' ? '<span class="pop-tag">⚠</span>' : '') + '</div>';
+      }).join('');
+    }
+
+    const approaching = etas.filter(e => e.isApp === '1' || (minsUntil(e.arrT) ?? 99) <= HOME.threshold);
+    reconcile(notified.approach, approaching.map(e => e.rn), rn => {
+      const e = approaching.find(x => x.rn === rn);
+      const m = minsUntil(e.arrT);
+      notify('🚆 Approaching Kedzie', `${(e.stpDe || 'Green Line').replace(/^Service toward\s*/i, '→ ')} · ${e.isApp === '1' || m <= 1 ? 'DUE' : m + ' min'}`, 'approach-' + rn);
+    });
+  }
+
+  // --- Green Line service alerts + Trigger 3 (new disruptions) ---
+  async function refreshAlerts() {
+    let alerts;
+    try {
+      const data = await (await fetch(`/api/alerts?route=${HOME.route}`)).json();
+      alerts = arr(data.CTAAlerts?.Alert);   // empty when ErrorCode 50 (no active alerts)
+    } catch (e) { return; }
+
+    const host = document.getElementById('alerts-panel');
+    host.innerHTML = alerts.length
+      ? alerts.slice(0, 8).map(a =>
+          `<div class="alert-item"><b>${a.Headline || 'Alert'}</b>${a.ShortDescription || ''}</div>`).join('')
+      : '<div class="alert-none">no active Green Line alerts</div>';
+
+    reconcile(notified.alert, alerts.map(a => String(a.AlertId)), id => {
+      const a = alerts.find(x => String(x.AlertId) === id);
+      notify('⚠ Green Line Alert', a.Headline || 'Service disruption', 'alert-' + id);
+    });
+  }
+
+  function renderStats(trains, tmst) {
+    const byLine = {};
+    let app = 0, dly = 0;
+    for (const t of trains) {
+      byLine[t.lineKey] = (byLine[t.lineKey] || 0) + 1;
+      if (t.isApp === '1') app++;
+      if (t.isDly === '1') dly++;
+    }
+    document.getElementById('s-trains').textContent = trains.length;
+    document.getElementById('m-trains').textContent = trains.length;
+    document.getElementById('s-app').textContent = app;
+    document.getElementById('s-dly').textContent = dly;
+    document.getElementById('m-lines').textContent =
+      `${Object.keys(byLine).length}/${active.size}`;
+    document.getElementById('s-age').textContent = tmst ? tmst.slice(11, 16) : '--';
+
+    for (const key of Object.keys(LINES)) {
+      const el = document.getElementById('cnt-' + key);
+      if (el) el.textContent = byLine[key] || 0;
+    }
+  }
+
+  function renderFeed(trains) {
+    // Show the soonest arrivals across all active trains.
+    const rows = trains
+      .map(t => ({ t, eta: minsUntil(t.arrT) }))
+      .filter(r => r.eta != null)
+      .sort((a, b) => a.eta - b.eta)
+      .slice(0, 14);
+    const feed = document.getElementById('feed');
+    feed.innerHTML = rows.map(({ t, eta }) => {
+      const m = t.isApp === '1' || eta <= 0 ? 'DUE' : eta + 'm';
+      return `<div class="feed-item" style="border-left-color:${t.color}">` +
+        `<b>${m}</b> ${t.nextStaNm || '—'} <span style="color:${t.color}">·</span> →${t.destNm || ''}` +
+        (t.isDly === '1' ? ' <span class="pop-tag">⚠</span>' : '') + `</div>`;
+    }).join('') || '<div class="feed-item">no active trains</div>';
+  }
+
+  function setFeedState(txt, kind) {
+    document.getElementById('feed-state').textContent = txt;
+    document.getElementById('b-state').textContent = txt;
+    const cls = kind === 'ok' ? '' : kind === 'dead' ? 'dead' : 'stale';
+    document.getElementById('pulse').className = 'pulse ' + cls;
+    document.getElementById('pulse2').className = 'pulse ' + cls;
+  }
+
+  // --- Sidebar line toggles ---
+  function buildLineList() {
+    const host = document.getElementById('line-list');
+    host.innerHTML = Object.entries(LINES).map(([key, c]) =>
+      `<div class="line-row" data-key="${key}">
+         <img class="line-badge" src="${c.icon}" width="18" height="18" alt="${c.name}">
+         <div class="line-name">${c.name}</div>
+         <div class="line-count" id="cnt-${key}">0</div>
+       </div>`).join('');
+    host.querySelectorAll('.line-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const key = row.dataset.key;
+        if (active.has(key)) { active.delete(key); row.classList.add('off'); }
+        else { active.add(key); row.classList.remove('off'); }
+        refresh();
+      });
+    });
+  }
+
+  // --- Clocks & countdown ---
+  function tick() {
+    const n = new Date();
+    document.getElementById('clk').textContent =
+      [n.getUTCHours(), n.getUTCMinutes(), n.getUTCSeconds()].map(v => String(v).padStart(2, '0')).join(':');
+    nextPoll = Math.max(0, nextPoll - 1);
+    document.getElementById('m-next').textContent = nextPoll;
+  }
+
+  // --- Boot ---
+  buildLineList();
+  document.getElementById('alert-btn').addEventListener('click', enableAlerts);
+  refresh();
+  refreshHome();
+  refreshAlerts();
+  setInterval(tick, 1000);
+  setInterval(refresh, POLL_MS);
+  setInterval(refreshHome, POLL_MS);
+  setInterval(refreshAlerts, 90_000);
+</script>
+</body>
+</html>

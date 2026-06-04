@@ -1,0 +1,251 @@
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+  :root {
+    --bg: #050d0a;
+    --panel: #080f0c;
+    --green: #00ff88;
+    --green-dim: rgba(0,255,136,0.45);
+    --green-faint: rgba(0,255,136,0.07);
+    --border: rgba(0,255,136,0.2);
+    --mono: 'Share Tech Mono','Courier New',monospace;
+    --red-line: #ff2222;
+    --blue-line: #2288ff;
+    --brown-line: #b05a2a;
+    --green-line: #00cc44;
+    --orange-line: #ff7700;
+    --pink-line: #ff44aa;
+    --purple-line: #9933ff;
+    --yellow-line: #ffcc00;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .root { background: var(--bg); font-family: var(--mono); padding: 10px; border-radius: 4px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px; }
+  .topbar-title { font-size: 12px; letter-spacing: 4px; color: var(--green); }
+  .topbar-title span { color: #ffaa00; }
+  .topbar-meta { font-size: 9px; color: var(--green-dim); display: flex; gap: 16px; }
+  .topbar-meta b { color: var(--green); font-weight: 400; }
+  .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: blink 1.3s ease-in-out infinite; vertical-align: middle; margin-right: 4px; }
+  @keyframes blink { 0%,100%{opacity:1}50%{opacity:.15} }
+  .map-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 2px; padding: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 0 4px; border-top: 1px solid var(--border); margin-top: 6px; }
+  .leg-item { display: flex; align-items: center; gap: 5px; font-size: 9px; letter-spacing: 1.5px; color: var(--green-dim); text-transform: uppercase; cursor: pointer; }
+  .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .leg-item:hover { color: var(--green); }
+  .leg-item.hidden { opacity: 0.3; }
+  .info-bar { display: flex; gap: 8px; margin-top: 8px; }
+  .info-box { background: var(--green-faint); border: 1px solid var(--border); border-radius: 2px; padding: 6px 10px; flex: 1; font-size: 9px; letter-spacing: 1px; color: var(--green-dim); }
+  .info-box b { display: block; font-size: 16px; color: var(--green); font-weight: 400; margin-top: 2px; }
+  .bottombar { border-top: 1px solid var(--border); padding-top: 7px; margin-top: 8px; display: flex; justify-content: space-between; font-size: 9px; color: var(--green-dim); letter-spacing: 2px; }
+  .scanline { pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(to bottom,transparent,transparent 2px,rgba(0,0,0,.05) 2px,rgba(0,0,0,.05) 4px); border-radius: 4px; opacity: .5; }
+</style>
+
+<h2 class="sr-only" style="position:absolute;left:-9999px">Chicago CTA L-train system map displayed in NORAD command center aesthetic with interactive line filtering</h2>
+<div class="root" style="position:relative">
+  <div class="scanline"></div>
+  <div class="topbar">
+    <div class="topbar-title">CTA <span>//</span> CHICAGO TRANSIT — TRACK GRID</div>
+    <div class="topbar-meta">
+      <span><span class="pulse"></span>LIVE</span>
+      <span>SECTOR <b>COOK COUNTY</b></span>
+      <span>LINES <b>8</b></span>
+      <span>STATIONS <b>145</b></span>
+      <span>UTC <b id="clk">--:--:--</b></span>
+    </div>
+  </div>
+  <div class="map-panel">
+    <svg id="cta-svg" viewBox="0 0 660 560" width="100%" style="display:block">
+
+      <rect width="660" height="560" fill="#050d0a"/>
+
+      <line x1="0" y1="112" x2="660" y2="112" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="0" y1="224" x2="660" y2="224" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="0" y1="336" x2="660" y2="336" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="0" y1="448" x2="660" y2="448" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="132" y1="0" x2="132" y2="560" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="264" y1="0" x2="264" y2="560" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="396" y1="0" x2="396" y2="560" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+      <line x1="528" y1="0" x2="528" y2="560" stroke="rgba(0,255,136,0.05)" stroke-width="0.5"/>
+
+      <text x="10" y="14" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="9">N</text>
+      <text x="10" y="550" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="9">S</text>
+      <text x="642" y="14" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="9">E</text>
+      <text x="642" y="550" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="9">W</text>
+
+      <text x="320" y="285" fill="rgba(0,255,136,0.07)" font-family="Share Tech Mono,monospace" font-size="48" text-anchor="middle" dominant-baseline="middle" letter-spacing="8">LOOP</text>
+
+      <g id="line-red">
+        <polyline fill="none" stroke="#ff2222" stroke-width="3.5" stroke-linejoin="round"
+          points="330,10 330,80 330,140 328,180 325,220 322,240 320,260"/>
+        <polyline fill="none" stroke="#ff2222" stroke-width="3.5" stroke-linejoin="round"
+          points="320,260 318,280 315,300 313,315 310,330"/>
+        <polyline fill="none" stroke="#ff2222" stroke-width="3.5" stroke-linejoin="round"
+          points="310,330 308,360 306,400 304,440 302,490 300,540"/>
+        <polyline fill="none" stroke="#ff2222" stroke-width="3.5" stroke-linejoin="round"
+          points="320,260 345,258 370,256 400,254 430,252 460,250 490,248 520,246 550,240"/>
+        <circle cx="330" cy="10" r="4" fill="#ff2222" opacity="0.7"/>
+        <circle cx="330" cy="80" r="3.5" fill="#ff2222"/>
+        <circle cx="329" cy="140" r="3.5" fill="#ff2222"/>
+        <circle cx="325" cy="220" r="3.5" fill="#ff2222"/>
+        <circle cx="320" cy="260" r="5" fill="#ff2222" stroke="#050d0a" stroke-width="1.5"/>
+        <circle cx="310" cy="330" r="5" fill="#ff2222" stroke="#050d0a" stroke-width="1.5"/>
+        <circle cx="302" cy="490" r="3.5" fill="#ff2222"/>
+        <circle cx="300" cy="540" r="4" fill="#ff2222" opacity="0.7"/>
+        <circle cx="460" cy="250" r="3.5" fill="#ff2222"/>
+        <circle cx="550" cy="240" r="4" fill="#ff2222" opacity="0.7"/>
+        <text x="334" y="78" fill="#ff5555" font-family="Share Tech Mono,monospace" font-size="8">HOWARD</text>
+        <text x="334" y="138" fill="#ff5555" font-family="Share Tech Mono,monospace" font-size="8">LOYOLA</text>
+        <text x="324" y="248" fill="#ff5555" font-family="Share Tech Mono,monospace" font-size="7">WILSON</text>
+        <text x="315" y="493" fill="#ff5555" font-family="Share Tech Mono,monospace" font-size="8">95TH</text>
+        <text x="555" y="238" fill="#ff5555" font-family="Share Tech Mono,monospace" font-size="8">O'HARE →</text>
+      </g>
+
+      <g id="line-blue">
+        <polyline fill="none" stroke="#2288ff" stroke-width="3.5" stroke-linejoin="round"
+          points="20,280 60,280 100,280 140,280 175,280 200,280 220,275 240,270 258,268 274,268 290,268 310,268 320,268 330,268"/>
+        <polyline fill="none" stroke="#2288ff" stroke-width="3.5" stroke-linejoin="round"
+          points="330,268 345,268 365,270 390,272 415,276 440,280 460,282 480,284 500,286 520,288 545,290 565,292 590,294 620,296 650,300"/>
+        <circle cx="20" cy="280" r="4" fill="#2288ff" opacity="0.7"/>
+        <circle cx="100" cy="280" r="3.5" fill="#2288ff"/>
+        <circle cx="175" cy="280" r="3.5" fill="#2288ff"/>
+        <circle cx="220" cy="275" r="3.5" fill="#2288ff"/>
+        <circle cx="330" cy="268" r="5" fill="#2288ff" stroke="#050d0a" stroke-width="1.5"/>
+        <circle cx="460" cy="282" r="3.5" fill="#2288ff"/>
+        <circle cx="565" cy="292" r="3.5" fill="#2288ff"/>
+        <circle cx="650" cy="300" r="4" fill="#2288ff" opacity="0.7"/>
+        <text x="24" y="272" fill="#5599ff" font-family="Share Tech Mono,monospace" font-size="8">FOREST PK</text>
+        <text x="104" y="272" fill="#5599ff" font-family="Share Tech Mono,monospace" font-size="8">OHARE</text>
+        <text x="334" y="264" fill="#5599ff" font-family="Share Tech Mono,monospace" font-size="7">CLARK/LK</text>
+        <text x="464" y="276" fill="#5599ff" font-family="Share Tech Mono,monospace" font-size="8">ROSEMONT</text>
+        <text x="652" y="296" fill="#5599ff" font-family="Share Tech Mono,monospace" font-size="8">→ ORD</text>
+      </g>
+
+      <g id="line-brown">
+        <polyline fill="none" stroke="#b05a2a" stroke-width="3" stroke-linejoin="round"
+          points="280,20 280,50 280,90 280,130 282,165 285,200 288,230 290,260 292,280 293,295 294,310 295,325 296,340"/>
+        <circle cx="280" cy="20" r="4" fill="#b05a2a" opacity="0.7"/>
+        <circle cx="280" cy="90" r="3" fill="#b05a2a"/>
+        <circle cx="285" cy="200" r="3" fill="#b05a2a"/>
+        <circle cx="295" cy="325" r="3" fill="#b05a2a"/>
+        <circle cx="296" cy="340" r="4.5" fill="#b05a2a" stroke="#050d0a" stroke-width="1.5"/>
+        <text x="284" y="88" fill="#cc7744" font-family="Share Tech Mono,monospace" font-size="8">KIMBALL</text>
+        <text x="284" y="198" fill="#cc7744" font-family="Share Tech Mono,monospace" font-size="8">IRVING PK</text>
+      </g>
+
+      <g id="line-green">
+        <polyline fill="none" stroke="#00cc44" stroke-width="3" stroke-linejoin="round"
+          points="30,320 70,320 110,318 150,316 190,314 220,312 245,310 260,308 275,306 285,304 296,302 305,300 315,298 325,296 330,295"/>
+        <polyline fill="none" stroke="#00cc44" stroke-width="3" stroke-linejoin="round"
+          points="330,295 340,295 350,296 360,298 370,300 380,302 390,303 400,304 410,305 430,305 450,305 470,305 490,305 510,505 530,505 550,505 570,505 590,505"/>
+        <circle cx="30" cy="320" r="3.5" fill="#00cc44" opacity="0.7"/>
+        <circle cx="150" cy="316" r="3" fill="#00cc44"/>
+        <circle cx="245" cy="310" r="3" fill="#00cc44"/>
+        <circle cx="330" cy="295" r="4.5" fill="#00cc44" stroke="#050d0a" stroke-width="1.5"/>
+        <circle cx="450" cy="305" r="3" fill="#00cc44"/>
+        <circle cx="510" cy="505" r="3" fill="#00cc44"/>
+        <circle cx="590" cy="505" r="3.5" fill="#00cc44" opacity="0.7"/>
+        <text x="34" y="312" fill="#33dd66" font-family="Share Tech Mono,monospace" font-size="8">HARLEM/LK</text>
+        <text x="594" y="503" fill="#33dd66" font-family="Share Tech Mono,monospace" font-size="8">COTTAGE GRV</text>
+      </g>
+
+      <g id="line-orange">
+        <polyline fill="none" stroke="#ff7700" stroke-width="3" stroke-linejoin="round"
+          points="160,540 165,510 170,490 178,468 188,450 198,436 210,422 222,412 235,405 248,400 260,396 272,392 282,388 292,384 302,381 310,378 318,375 326,373 330,370"/>
+        <circle cx="160" cy="540" r="3.5" fill="#ff7700" opacity="0.7"/>
+        <circle cx="188" cy="450" r="3" fill="#ff7700"/>
+        <circle cx="235" cy="405" r="3" fill="#ff7700"/>
+        <circle cx="282" cy="388" r="3" fill="#ff7700"/>
+        <circle cx="330" cy="370" r="4.5" fill="#ff7700" stroke="#050d0a" stroke-width="1.5"/>
+        <text x="100" y="535" fill="#ff9933" font-family="Share Tech Mono,monospace" font-size="8">MIDWAY →</text>
+        <text x="126" y="548" fill="#ff9933" font-family="Share Tech Mono,monospace" font-size="7">MDW</text>
+      </g>
+
+      <g id="line-pink">
+        <polyline fill="none" stroke="#ff44aa" stroke-width="3" stroke-linejoin="round"
+          points="130,540 132,510 134,490 136,470 138,450 140,432 143,415 146,400 150,386 154,374 158,362 163,352 168,344 174,338 180,333 187,328 194,324 202,320 210,317 218,315 226,313 234,312 243,311 252,310 261,310 270,310 278,310 286,310 294,310 303,310 310,310 318,310 326,310 330,310"/>
+        <circle cx="130" cy="540" r="3.5" fill="#ff44aa" opacity="0.7"/>
+        <circle cx="140" cy="432" r="3" fill="#ff44aa"/>
+        <circle cx="174" cy="338" r="3" fill="#ff44aa"/>
+        <circle cx="226" cy="313" r="3" fill="#ff44aa"/>
+        <circle cx="330" cy="310" r="4.5" fill="#ff44aa" stroke="#050d0a" stroke-width="1.5"/>
+        <text x="60" y="535" fill="#ff77cc" font-family="Share Tech Mono,monospace" font-size="8">54/CERMAK →</text>
+      </g>
+
+      <g id="line-purple">
+        <polyline fill="none" stroke="#9933ff" stroke-width="3" stroke-linejoin="round"
+          points="266,20 266,55 266,90 268,130 270,170 272,210 273,240 274,270 275,290 276,305 277,315 278,325 280,335 283,345 287,352 292,357 298,361 305,365 312,367 319,368 325,368 330,368"/>
+        <circle cx="266" cy="20" r="3.5" fill="#9933ff" opacity="0.7"/>
+        <circle cx="266" cy="90" r="3" fill="#9933ff"/>
+        <circle cx="270" cy="170" r="3" fill="#9933ff"/>
+        <circle cx="274" cy="270" r="3" fill="#9933ff"/>
+        <circle cx="330" cy="368" r="4.5" fill="#9933ff" stroke="#050d0a" stroke-width="1.5"/>
+        <text x="242" y="88" fill="#bb66ff" font-family="Share Tech Mono,monospace" font-size="8">LINDEN</text>
+        <text x="240" y="168" fill="#bb66ff" font-family="Share Tech Mono,monospace" font-size="8">CENTRAL</text>
+      </g>
+
+      <g id="line-yellow">
+        <polyline fill="none" stroke="#ffcc00" stroke-width="3" stroke-linejoin="round"
+          points="252,20 253,50 254,80 255,110 256,140 257,160 258,185 259,200 260,220 261,250"/>
+        <circle cx="252" cy="20" r="3.5" fill="#ffcc00" opacity="0.7"/>
+        <circle cx="255" cy="110" r="3" fill="#ffcc00"/>
+        <circle cx="261" cy="250" r="4" fill="#ffcc00" stroke="#050d0a" stroke-width="1.5"/>
+        <text x="228" y="18" fill="#ffdd44" font-family="Share Tech Mono,monospace" font-size="8">SKOKIE →</text>
+      </g>
+
+      <rect x="290" y="250" width="80" height="130" fill="none" stroke="rgba(0,255,136,0.25)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="303" y="244" fill="rgba(0,255,136,0.5)" font-family="Share Tech Mono,monospace" font-size="9" letter-spacing="2">THE LOOP</text>
+
+      <text x="10" y="175" fill="rgba(0,255,136,0.25)" font-family="Share Tech Mono,monospace" font-size="8" writing-mode="horizontal-tb" transform="rotate(-90,10,175)">NORTHWEST</text>
+      <text x="10" y="420" fill="rgba(0,255,136,0.25)" font-family="Share Tech Mono,monospace" font-size="8" writing-mode="horizontal-tb" transform="rotate(-90,10,420)">SOUTH SIDE</text>
+      <text x="580" y="140" fill="rgba(0,255,136,0.25)" font-family="Share Tech Mono,monospace" font-size="8">O'HARE CORRIDOR</text>
+
+      <text x="296" y="418" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="7">41.88°N</text>
+      <text x="296" y="428" fill="rgba(0,255,136,0.2)" font-family="Share Tech Mono,monospace" font-size="7">87.63°W</text>
+    </svg>
+    <div class="legend" id="legend">
+      <div class="leg-item" data-line="red" onclick="toggleLine('red')"><div class="leg-dot" style="background:#ff2222"></div>Red</div>
+      <div class="leg-item" data-line="blue" onclick="toggleLine('blue')"><div class="leg-dot" style="background:#2288ff"></div>Blue</div>
+      <div class="leg-item" data-line="brown" onclick="toggleLine('brown')"><div class="leg-dot" style="background:#b05a2a"></div>Brown</div>
+      <div class="leg-item" data-line="green" onclick="toggleLine('green')"><div class="leg-dot" style="background:#00cc44"></div>Green</div>
+      <div class="leg-item" data-line="orange" onclick="toggleLine('orange')"><div class="leg-dot" style="background:#ff7700"></div>Orange</div>
+      <div class="leg-item" data-line="pink" onclick="toggleLine('pink')"><div class="leg-dot" style="background:#ff44aa"></div>Pink</div>
+      <div class="leg-item" data-line="purple" onclick="toggleLine('purple')"><div class="leg-dot" style="background:#9933ff"></div>Purple</div>
+      <div class="leg-item" data-line="yellow" onclick="toggleLine('yellow')"><div class="leg-dot" style="background:#ffcc00"></div>Yellow (Skokie)</div>
+    </div>
+  </div>
+  <div class="info-bar">
+    <div class="info-box">NETWORK STATUS<b>OPERATIONAL</b></div>
+    <div class="info-box">ACTIVE LINES<b id="active-lines">8 / 8</b></div>
+    <div class="info-box">SYSTEM COVERAGE<b>COOK COUNTY</b></div>
+    <div class="info-box">CLASSIFICATION<b style="color:#ffaa00">TRANSIT OPS</b></div>
+  </div>
+  <div class="bottombar">
+    <span><span class="pulse"></span>FEED NOMINAL</span>
+    <span>CTA GRID REF // CHICAGO COMMAND</span>
+    <span>UNCLASSIFIED // PUBLIC TRANSIT</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  function tick(){
+    const n=new Date();
+    const el=document.getElementById('clk');
+    if(el) el.textContent=[n.getUTCHours(),n.getUTCMinutes(),n.getUTCSeconds()].map(v=>String(v).padStart(2,'0')).join(':');
+  }
+  setInterval(tick,1000);tick();
+
+  const hidden={};
+  window.toggleLine=function(name){
+    const el=document.getElementById('line-'+name);
+    const leg=document.querySelector('[data-line="'+name+'"]');
+    if(!el||!leg)return;
+    hidden[name]=!hidden[name];
+    el.style.opacity=hidden[name]?'0.08':'1';
+    leg.classList.toggle('hidden',!!hidden[name]);
+    const count=8-Object.values(hidden).filter(Boolean).length;
+    const al=document.getElementById('active-lines');
+    if(al)al.textContent=count+' / 8';
+  };
+})();
+</script>

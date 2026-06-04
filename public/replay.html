@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CTA // TRACK GRID — REPLAY</title>
+  <link rel="shortcut icon" type="image/x-icon" href="images/favicon.ico">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+    :root {
+      --bg: #01060b; --panel: #040b10; --green: #00ffaa;
+      --green-dim: rgba(0,255,170,0.45); --green-faint: rgba(0,255,170,0.07);
+      --border: rgba(0,255,170,0.2); --mono: 'Share Tech Mono','Courier New',monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); font-family: var(--mono); color: var(--green-dim); }
+    body { display: flex; flex-direction: column; }
+
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border); padding: 8px 14px; flex-shrink: 0; gap: 12px; flex-wrap: wrap; }
+    .topbar-title { font-size: 13px; letter-spacing: 4px; color: var(--green); }
+    .topbar-title span { color: #ffaa00; }
+    .topbar-meta { font-size: 10px; color: var(--green-dim); display: flex; gap: 16px; align-items: center; }
+    .topbar-meta b { color: var(--green); font-weight: 400; }
+    .ranges button, .live-link { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; cursor: pointer;
+      background: var(--green-faint); color: var(--green-dim); border: 1px solid var(--border);
+      border-radius: 2px; padding: 4px 8px; text-transform: uppercase; text-decoration: none; }
+    .ranges button:hover, .live-link:hover { color: var(--green); border-color: var(--green); }
+    .ranges button.on { color: #ffcc00; border-color: rgba(255,204,0,0.5); }
+
+    .map-wrap { flex: 1; position: relative; min-width: 0; }
+    #map { position: absolute; inset: 0; background: #01040a; }
+    .leaflet-container { background: #01040a; }
+    .leaflet-tile-pane {
+      filter: brightness(1.3) contrast(1.5) sepia(0.92) hue-rotate(108deg) saturate(3.6);
+    }
+    .leaflet-overlay-pane { filter: drop-shadow(0 0 2px rgba(0,255,170,0.75)); }
+    .landmark { overflow: visible; }
+    .lm-ring { width: 8px; height: 8px; border: 1px solid #00ffcc; border-radius: 50%;
+      box-shadow: 0 0 7px #00ffcc; position: relative; }
+    .lm-ring::after { content: ''; position: absolute; inset: 2px; background: #00ffcc; border-radius: 50%; }
+    .lm-label { position: absolute; left: 12px; top: -3px; white-space: nowrap; font-size: 8px;
+      letter-spacing: 1.5px; color: #00ffcc; text-shadow: 0 0 5px rgba(0,255,204,0.9); text-transform: uppercase; }
+    .landmark.water .lm-label { left: 0; color: rgba(0,200,255,0.55); text-shadow: 0 0 6px rgba(0,160,255,0.5);
+      font-size: 9px; letter-spacing: 4px; }
+    .landmark.burb .lm-ring { width: 6px; height: 6px; border-color: rgba(150,180,255,0.7);
+      box-shadow: 0 0 5px rgba(150,180,255,0.55); }
+    .landmark.burb .lm-ring::after { background: rgba(150,180,255,0.85); }
+    .landmark.burb .lm-label { left: 10px; color: rgba(150,180,255,0.6);
+      text-shadow: 0 0 4px rgba(120,150,220,0.55); font-size: 7px; }
+    .crt-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 650;
+      background:
+        radial-gradient(ellipse at center, transparent 48%, rgba(0,0,0,0.65) 100%),
+        repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,10,8,0.16) 2px 3px); }
+
+    .train-ico { transform-origin: center; }
+    .train-ico .blip { animation: ping 2s ease-out infinite; }
+    @keyframes ping { 0%{r:0;opacity:.7} 100%{r:14;opacity:0} }
+    .home-star svg { filter: drop-shadow(0 0 6px #ffcc00); }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #06140e; color: var(--green);
+      border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono); }
+    .leaflet-popup-content { font-size: 11px; line-height: 1.5; margin: 8px 10px; }
+    .pop-t { font-size: 12px; color: var(--green); }
+    .pop-sub { color: var(--green-dim); font-size: 10px; }
+
+    /* Transport bar */
+    .transport { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--panel);
+      display: flex; align-items: center; gap: 14px; padding: 10px 16px; }
+    .play-btn { font-family: var(--mono); font-size: 14px; cursor: pointer; width: 38px; height: 30px;
+      background: var(--green-faint); color: var(--green); border: 1px solid var(--border); border-radius: 2px; }
+    .play-btn:hover { background: rgba(0,255,170,0.16); }
+    .scrub { flex: 1; appearance: none; height: 4px; background: var(--border); border-radius: 2px; outline: none; }
+    .scrub::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: #ffcc00; box-shadow: 0 0 6px #ffcc00; cursor: pointer; }
+    .scrub::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #ffcc00;
+      box-shadow: 0 0 6px #ffcc00; border: none; cursor: pointer; }
+    .t-clock { font-size: 15px; color: var(--green); letter-spacing: 1px; min-width: 168px; text-align: right; }
+    .t-meta { font-size: 9px; color: var(--green-dim); min-width: 96px; }
+    .t-meta b { color: var(--green); font-weight: 400; }
+    .speeds button { font-family: var(--mono); font-size: 9px; cursor: pointer; padding: 4px 7px;
+      background: var(--green-faint); color: var(--green-dim); border: 1px solid var(--border); border-radius: 2px; }
+    .speeds button.on { color: #ffcc00; border-color: rgba(255,204,0,0.5); }
+    .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--green-dim); font-size: 12px; letter-spacing: 2px; z-index: 600; text-align: center; pointer-events: none; }
+
+    /* --- Mobile: wrap controls, full-width scrubber --- */
+    @media (max-width: 720px) {
+      .topbar { gap: 6px 10px; padding: 7px 10px; }
+      .topbar-title { flex-basis: 100%; font-size: 11px; letter-spacing: 2px; }
+      .transport { flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px; }
+      .scrub { order: 10; flex-basis: 100%; }
+      .t-clock { min-width: 0; text-align: left; font-size: 13px; }
+      .t-meta { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-title">CTA <span>//</span> TRACK GRID — REPLAY</div>
+    <div class="ranges" id="ranges">
+      <button data-h="1">1H</button>
+      <button data-h="6">6H</button>
+      <button data-h="24" class="on">24H</button>
+      <button data-h="168">7D</button>
+      <button data-h="720">30D</button>
+    </div>
+    <div class="topbar-meta">
+      <span>FRAMES <b id="m-frames">--</b></span>
+      <span>TRAINS <b id="m-trains">--</b></span>
+      <a class="live-link" href="/">▸ LIVE</a>
+    </div>
+  </div>
+
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="crt-overlay"></div>
+    <div class="empty" id="empty">LOADING HISTORY…</div>
+  </div>
+
+  <div class="transport">
+    <button class="play-btn" id="play">▶</button>
+    <input type="range" class="scrub" id="scrub" min="0" max="0" value="0">
+    <div class="speeds" id="speeds">
+      <button data-s="1" class="on">1×</button>
+      <button data-s="4">4×</button>
+      <button data-s="12">12×</button>
+      <button data-s="30">30×</button>
+    </div>
+    <div class="t-meta">FRAME <b id="t-idx">0</b> / <b id="t-tot">0</b></div>
+    <div class="t-clock" id="t-clock">—</div>
+  </div>
+
+  <script src="ctaData.js"></script>
+  <script>
+  const LINES = {
+    red:  { color: '#ff2a2a', name: 'Red' },   blue: { color: '#3399ff', name: 'Blue' },
+    brn:  { color: '#c0692f', name: 'Brown' },  g:    { color: '#00cc44', name: 'Green' },
+    org:  { color: '#ff8800', name: 'Orange' }, p:    { color: '#a64dff', name: 'Purple' },
+    pink: { color: '#ff55aa', name: 'Pink' },   y:    { color: '#ffcc00', name: 'Yellow' },
+  };
+  const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+  const HOME = { lat: 41.884321, lon: -87.706155 };
+
+  // --- Map (same NORAD board as the live monitor) ---
+  const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([41.86, -87.66], 11);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19, subdomains: 'abcd',
+  }).addTo(map);
+
+  map.createPane('lines');
+  const linePane = map.getPane('lines');
+  linePane.style.zIndex = 250;
+  linePane.style.filter = 'drop-shadow(0 0 3px rgba(0,255,170,0.5))';
+  fetch('lines.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'lines',
+      style: (f) => ({ color: f.properties.color, weight: 3, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }),
+    }).addTo(map);
+  }).catch(() => {});
+
+  map.createPane('metra');
+  const metraPane = map.getPane('metra');
+  metraPane.style.zIndex = 240;
+  metraPane.style.filter = 'drop-shadow(0 0 2px rgba(150,180,255,0.35))';
+  fetch('metra.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'metra',
+      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.5, dashArray: '3 5', lineCap: 'round' }),
+    }).addTo(map);
+  }).catch(() => {});
+
+  const trainLayer = L.layerGroup().addTo(map);
+  const stationLayer = L.layerGroup().addTo(map);
+
+  (function plotStations() {
+    const seen = new Set();
+    for (const s of (window.ctaStops || [])) {
+      if (seen.has(s.MAP_ID)) continue;
+      seen.add(s.MAP_ID);
+      const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
+      if (!m) continue;
+      L.circleMarker([+m[1], +m[2]], {
+        radius: 2.2, color: '#00ffaa', weight: 1, opacity: 0.85, fillColor: '#00ffaa', fillOpacity: 0.3,
+      }).addTo(stationLayer);
+    }
+  })();
+  L.marker([HOME.lat, HOME.lon], { zIndexOffset: 1000, icon: L.divIcon({
+    className: 'home-star', iconSize: [28, 28], iconAnchor: [14, 14],
+    html: `<svg width="28" height="28" viewBox="0 0 24 24"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.7 7-6.3-3.8-6.3 3.8 1.7-7-5.4-4.7 7.1-.6z" fill="#ffcc00" stroke="#050d0a" stroke-width="1"/></svg>`,
+  }) }).addTo(map).bindPopup('<div class="pop-t">★ HOME · KEDZIE</div>');
+
+  for (const lm of [
+    { name: 'The Loop', lat: 41.8786, lon: -87.6298 },
+    { name: "O'Hare · ORD", lat: 41.9786, lon: -87.9047 },
+    { name: 'Midway · MDW', lat: 41.7868, lon: -87.7522 },
+    { name: 'Navy Pier', lat: 41.8917, lon: -87.6086 },
+    { name: 'Lake Michigan', lat: 41.93, lon: -87.58, water: true },
+    { name: 'Evanston', lat: 42.045, lon: -87.690, burb: true },
+    { name: 'Oak Park', lat: 41.888, lon: -87.788, burb: true },
+    { name: 'Skokie', lat: 42.036, lon: -87.740, burb: true },
+    { name: 'Naperville', lat: 41.748, lon: -88.165, burb: true },
+    { name: 'Aurora', lat: 41.761, lon: -88.315, burb: true },
+    { name: 'Joliet', lat: 41.525, lon: -88.082, burb: true },
+    { name: 'Elgin', lat: 42.037, lon: -88.281, burb: true },
+    { name: 'Waukegan', lat: 42.363, lon: -87.845, burb: true },
+    { name: 'Arlington Hts', lat: 42.088, lon: -87.981, burb: true },
+    { name: 'Schaumburg', lat: 42.034, lon: -88.083, burb: true },
+    { name: 'Geneva', lat: 41.888, lon: -88.305, burb: true },
+    { name: 'Blue Island', lat: 41.657, lon: -87.680, burb: true },
+    { name: 'Univ Park', lat: 41.445, lon: -87.717, burb: true },
+    { name: 'Tinley Park', lat: 41.573, lon: -87.784, burb: true },
+    { name: 'Lake Forest', lat: 42.259, lon: -87.840, burb: true },
+    { name: 'Fox Lake', lat: 42.396, lon: -88.183, burb: true },
+    { name: 'Kenosha, WI', lat: 42.585, lon: -87.821, burb: true },
+  ]) {
+    L.marker([lm.lat, lm.lon], { interactive: false, zIndexOffset: 500, icon: L.divIcon({
+      className: 'landmark' + (lm.water ? ' water' : lm.burb ? ' burb' : ''), iconSize: [8, 8], iconAnchor: [4, 4],
+      html: (lm.water ? '' : '<div class="lm-ring"></div>') + `<div class="lm-label">${lm.name}</div>`,
+    }) }).addTo(map);
+  }
+
+  function trainIcon(color, heading) {
+    const h = parseInt(heading, 10) || 0;
+    return L.divIcon({
+      className: 'train-ico', iconSize: [28, 28], iconAnchor: [14, 14],
+      html: `<svg width="28" height="28" viewBox="0 0 28 28"
+        style="transform:rotate(${h}deg);filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 7px ${color})">
+        <circle class="blip" cx="14" cy="14" r="6" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="M14 3 L21 23 L14 17.5 L7 23 Z" fill="${color}" stroke="#ffffff" stroke-width="0.8"/>
+      </svg>`,
+    });
+  }
+
+  function renderTrains(payload) {
+    trainLayer.clearLayers();
+    const ctatt = (payload && payload.ctatt) || {};
+    let n = 0;
+    for (const route of arr(ctatt.route)) {
+      const key = String(route['@name'] || route.name || '').toLowerCase();
+      const cfg = LINES[key] || { color: '#00ffaa', name: key.toUpperCase() };
+      for (const t of arr(route.train)) {
+        if (!t.lat || !t.lon) continue;
+        n++;
+        L.marker([+t.lat, +t.lon], { icon: trainIcon(cfg.color, t.heading) })
+          .bindPopup(`<div class="pop-t">RUN ${t.rn} · ${cfg.name.toUpperCase()}</div>` +
+            `<div class="pop-sub">→ ${t.destNm || '—'}</div>`)
+          .addTo(trainLayer);
+      }
+    }
+    document.getElementById('m-trains').textContent = n;
+  }
+
+  // --- History state ---
+  let frames = [];          // [{id, observed_at, train_count}]
+  let cur = 0;
+  let playing = false;
+  let speed = 1;            // frames advanced per 500ms tick
+  let timer = null;
+  const cache = new Map();  // id -> Promise(snapshot)
+
+  function getSnapshot(id) {
+    if (!cache.has(id)) {
+      if (cache.size > 800) cache.clear();   // soft cap for long-range scrubbing
+      cache.set(id, fetch(`/api/history/snapshot?id=${id}`).then(r => r.json()).catch(() => null));
+    }
+    return cache.get(id);
+  }
+
+  function fmtClock(ms) {
+    const d = new Date(ms);
+    return d.toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function showFrame(i) {
+    if (!frames.length) return;
+    cur = Math.max(0, Math.min(frames.length - 1, i));
+    const f = frames[cur];
+    document.getElementById('scrub').value = cur;
+    document.getElementById('t-idx').textContent = cur + 1;
+    document.getElementById('t-clock').textContent = fmtClock(f.observed_at);
+    // Prefetch the next few for smooth playback.
+    for (let k = 1; k <= 4 && cur + k < frames.length; k++) getSnapshot(frames[cur + k].id);
+    const snap = await getSnapshot(f.id);
+    if (snap && snap.payload) renderTrains(snap.payload);
+  }
+
+  function play() {
+    if (!frames.length) return;
+    playing = true;
+    document.getElementById('play').textContent = '⏸';
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (cur >= frames.length - 1) { showFrame(0); }
+      else showFrame(cur + speed);
+    }, 500);
+  }
+  function pause() {
+    playing = false;
+    document.getElementById('play').textContent = '▶';
+    clearInterval(timer);
+  }
+
+  async function loadRange(hours) {
+    pause();
+    const empty = document.getElementById('empty');
+    empty.style.display = 'flex';
+    empty.textContent = 'LOADING HISTORY…';
+    const to = Date.now();
+    const from = to - hours * 3600_000;
+    let data;
+    try {
+      data = await (await fetch(`/api/history/index?from=${from}&to=${to}`)).json();
+    } catch (e) { empty.textContent = 'HISTORY UNAVAILABLE'; return; }
+    frames = data.frames || [];
+    cache.clear();
+    document.getElementById('m-frames').textContent = frames.length;
+    document.getElementById('t-tot').textContent = frames.length;
+    const scrub = document.getElementById('scrub');
+    scrub.max = Math.max(0, frames.length - 1);
+    scrub.value = 0;
+    if (!frames.length) {
+      empty.textContent = 'NO SNAPSHOTS IN RANGE — capture runs every minute once deployed.';
+      trainLayer.clearLayers();
+      document.getElementById('m-trains').textContent = '0';
+      document.getElementById('t-clock').textContent = '—';
+      return;
+    }
+    empty.style.display = 'none';
+    await showFrame(frames.length - 1);   // start at the most recent frame
+  }
+
+  // --- Controls ---
+  document.getElementById('play').addEventListener('click', () => (playing ? pause() : play()));
+  document.getElementById('scrub').addEventListener('input', (e) => { pause(); showFrame(+e.target.value); });
+  document.getElementById('ranges').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#ranges button').forEach(x => x.classList.toggle('on', x === b));
+    loadRange(+b.dataset.h);
+  });
+  document.getElementById('speeds').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#speeds button').forEach(x => x.classList.toggle('on', x === b));
+    speed = +b.dataset.s;
+  });
+
+  // --- Boot: default 24h ---
+  loadRange(24);
+  </script>
+</body>
+</html>
