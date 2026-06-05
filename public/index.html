@@ -230,7 +230,6 @@
     <span class="dispatch-tag">▎ DISPATCH</span>
     <span class="dispatch-text" id="feed-narration"><span class="nar-load">reading the board…</span></span>
     <span class="dispatch-live">● LIVE</span>
-    <audio id="narration-audio" preload="none"></audio>
   </div>
 
   <div class="stage">
@@ -810,39 +809,42 @@
   }
 
   // --- AI dispatcher narration (jaded one-liner on live network state) ---
-  // TTS voice: speak the three AI panels (SITREP → events → dispatch) in
-  // sequence via one shared <audio>, queued so they never overlap. Off until the
-  // user opts in (the toggle click is the autoplay gesture browsers require).
+  // Voice: the browser's built-in Web Speech synthesis — free, unlimited, and
+  // client-side, so the 30s "keep feeding" cadence costs nothing and needs no
+  // server audio/cache. Speaks each panel's text directly; speechSynthesis keeps
+  // its own utterance queue so the three lines play in sequence without overlap.
   let narrateOn = false;
   const speakOrder = ['sitrep', 'events', 'narration'];
   const lastData = { sitrep: null, events: null, narration: null };     // latest payload per panel
   const lastSpoken = { sitrep: null, events: null, narration: null };   // last hash spoken per panel
-  const lastSpokenAt = { sitrep: 0, events: 0, narration: 0 };          // when each was last voiced
-  // Voice cadence throttle (decoupled from the 30s text feed) so TTS stays
-  // within the Workers AI budget — the chatty narration speaks at most ~2.5min.
-  const SPEAK_MIN_MS = { sitrep: 0, events: 0, narration: 150_000 };
-  const speechQueue = [];
-  let speaking = false;
+  const hasTTS = 'speechSynthesis' in window;
+  let ttsVoice = null;
 
-  function pumpSpeech() {
-    if (speaking || !speechQueue.length) return;
-    const { src } = speechQueue.shift();
-    const el = document.getElementById('narration-audio');
-    speaking = true;
-    el.onended = el.onerror = () => { speaking = false; pumpSpeech(); };
-    el.src = src;
-    el.play().catch(() => { speaking = false; pumpSpeech(); });   // skip on autoplay block / error
+  function pickVoice() {
+    const voices = speechSynthesis.getVoices();
+    if (!voices.length) return;
+    // Prefer a dry English male voice for the deadpan; fall back to any English.
+    const prefer = ['Daniel', 'Arthur', 'Alex', 'Google UK English Male', 'Microsoft David', 'Fred', 'Rishi'];
+    ttsVoice = prefer.map(n => voices.find(v => v.name.includes(n))).find(Boolean)
+      || voices.find(v => /^en/i.test(v.lang) && /male/i.test(v.name))
+      || voices.find(v => /^en/i.test(v.lang)) || voices[0];
+  }
+  if (hasTTS) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+  function speak(text) {
+    if (!hasTTS) return;
+    const u = new SpeechSynthesisUtterance(text);
+    if (ttsVoice) u.voice = ttsVoice;
+    u.rate = 0.97; u.pitch = 0.85;     // a touch slow + low → dry deadpan
+    speechSynthesis.speak(u);          // speechSynthesis queues utterances itself
   }
 
-  // Queue a panel's audio when its content changed (deduped by hash per panel).
+  // Speak a panel's line when its content changed (deduped by hash per panel).
   function enqueueSpeech(kind, data) {
     if (data && data.summary) lastData[kind] = data;             // remember latest for speak-on-toggle
-    if (!narrateOn || !data || !data.audio || !data.hash || data.hash === lastSpoken[kind]) return;
-    if (Date.now() - lastSpokenAt[kind] < (SPEAK_MIN_MS[kind] || 0)) return;   // cadence throttle
+    if (!narrateOn || !data || !data.summary || !data.hash || data.hash === lastSpoken[kind]) return;
     lastSpoken[kind] = data.hash;
-    lastSpokenAt[kind] = Date.now();
-    speechQueue.push({ kind, src: data.audio });
-    pumpSpeech();
+    speak(data.summary);
   }
 
   async function refreshNarration() {
@@ -861,15 +863,14 @@
     narrateOn = !narrateOn;
     const btn = document.getElementById('narrate-btn');
     btn.classList.toggle('on', narrateOn);
-    btn.textContent = narrateOn ? '🔊 Voice: ON' : '🔊 Voice: OFF';
-    if (narrateOn) {
-      // The click is the autoplay gesture — read all three, freshly, in order.
-      speechQueue.length = 0;
-      speakOrder.forEach(k => { lastSpoken[k] = null; lastSpokenAt[k] = 0; });
+    btn.textContent = !hasTTS ? '🔊 unsupported' : narrateOn ? '🔊 Voice: ON' : '🔊 Voice: OFF';
+    if (narrateOn && hasTTS) {
+      // The click is the gesture; read all three, freshly, in order.
+      speechSynthesis.cancel();
+      speakOrder.forEach(k => { lastSpoken[k] = null; });
       speakOrder.forEach(k => enqueueSpeech(k, lastData[k]));
-    } else {
-      speechQueue.length = 0; speaking = false;
-      document.getElementById('narration-audio').pause();
+    } else if (hasTTS) {
+      speechSynthesis.cancel();
     }
   }
 
