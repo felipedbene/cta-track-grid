@@ -10,10 +10,23 @@
 // The Train Tracker API has no CORS headers, so the browser cannot call it
 // directly; the Worker relays the request and injects the key server-side.
 
+import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
+const { FeedMessage } = GtfsRealtimeBindings.transit_realtime;
+
 const LAPI = 'http://lapi.transitchicago.com/api/1.0';          // positions/arrivals/follow (needs key)
 const ALERTS_API = 'http://www.transitchicago.com/api/1.0';     // customer alerts (keyless)
 const ALL_ROUTES = 'red,blue,brn,g,org,p,pink,y';
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;                  // keep 30 days of snapshots
+
+// Metra regional rail — GTFS-realtime protobuf feeds (host gtfsapi.metrarail.com
+// retired 2025-11; new host below). Auth is a Sanctum bearer token kept as the
+// METRA_TOKEN secret. Realtime refreshes every 30s upstream and is rate-limited
+// (~200 req/min), so we edge-cache decoded responses for a window.
+const METRA_API = 'https://gtfspublic.metrarr.com/gtfs/public';
+
+// South Shore Line (NICTD, Indiana) — keyless GTFS-realtime via ETA SPOT. The
+// feed carries no route_id, so all trains render as a single South Shore line.
+const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.etaspot.net/position_updates.pb';
 
 // Fetch + parse a CTA endpoint. Injects the key when needsKey; optionally caches
 // the upstream response at the edge for `ttl` seconds. Throws on network/parse error.
@@ -60,9 +73,126 @@ function countTrains(ctatt) {
   return n;
 }
 
+// Fetch a Metra GTFS-realtime protobuf feed and return the decoded FeedMessage.
+// Edge-caches the upstream bytes for `ttl` seconds. Throws on network/auth error.
+async function fetchMetraFeed(env, endpoint, ttl) {
+  if (!env.METRA_TOKEN) throw new Error('METRA_TOKEN not configured');
+  const res = await fetch(`${METRA_API}/${endpoint}`, {
+    headers: { Authorization: `Bearer ${env.METRA_TOKEN}` },
+    signal: AbortSignal.timeout(10_000),
+    cf: ttl > 0 ? { cacheTtl: ttl, cacheEverything: true } : undefined,
+  });
+  if (!res.ok) throw new Error(`Metra ${endpoint} ${res.status}`);
+  return FeedMessage.decode(new Uint8Array(await res.arrayBuffer()));
+}
+
+// Vehicle positions → flat, CTA-shaped train list the frontend can render.
+async function metraPositions(env) {
+  const feed = await fetchMetraFeed(env, 'positions', 25);
+  const trains = [];
+  for (const e of feed.entity) {
+    const v = e.vehicle;
+    const p = v?.position;
+    if (!p || p.latitude == null || p.longitude == null) continue;
+    // Skip route-less GPS blips (yard moves / deadheads / between assignments) —
+    // only revenue trains assigned to a line are useful on the board.
+    if (!v.trip?.routeId) continue;
+    trains.push({
+      id: v.vehicle?.id || e.id,
+      label: v.vehicle?.label || null,
+      route: v.trip.routeId,
+      tripId: v.trip.tripId || null,
+      lat: p.latitude,
+      lon: p.longitude,
+      heading: p.bearing ?? null,
+      tmst: v.timestamp != null ? Number(v.timestamp) : null,
+    });
+  }
+  return { tmst: feed.header?.timestamp != null ? Number(feed.header.timestamp) : null, trains };
+}
+
+// South Shore vehicle positions (keyless ETA SPOT feed). Standard GTFS-rt
+// protobuf but route-less; we tag every train as the single South Shore line.
+async function southShorePositions() {
+  const res = await fetch(SOUTHSHORE_FEED, {
+    signal: AbortSignal.timeout(10_000),
+    cf: { cacheTtl: 20, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`South Shore feed ${res.status}`);
+  const feed = FeedMessage.decode(new Uint8Array(await res.arrayBuffer()));
+  const trains = [];
+  for (const e of feed.entity) {
+    const v = e.vehicle;
+    const p = v?.position;
+    if (!p || p.latitude == null || p.longitude == null) continue;
+    trains.push({
+      id: v.vehicle?.id || e.id,
+      label: v.vehicle?.label || null,
+      tripId: v.trip?.tripId || null,
+      stopId: v.stopId || null,
+      status: ['INCOMING_AT', 'STOPPED_AT', 'IN_TRANSIT_TO'][v.currentStatus] || null,
+      lat: p.latitude,
+      lon: p.longitude,
+      heading: p.bearing ?? null,
+      tmst: v.timestamp != null ? Number(v.timestamp) : null,
+    });
+  }
+  return { tmst: feed.header?.timestamp != null ? Number(feed.header.timestamp) : null, trains };
+}
+
+// First translation string of a GTFS-rt TranslatedString (header/desc/url).
+const trText = (t) => t?.translation?.[0]?.text || '';
+
+// Service alerts → headline, description, affected routes. Decoded with enum
+// names (effect/cause) for human-readable tags. Drops headerless entries.
+async function metraAlerts(env) {
+  const feed = await fetchMetraFeed(env, 'alerts', 60);
+  const o = FeedMessage.toObject(feed, { enums: String, longs: Number, defaults: false });
+  const alerts = [];
+  for (const e of o.entity || []) {
+    const a = e.alert;
+    const header = trText(a?.headerText);
+    if (!a || !header) continue;
+    const routes = [...new Set((a.informedEntity || []).map((ie) => ie.routeId).filter(Boolean))];
+    alerts.push({
+      id: e.id,
+      header,
+      description: trText(a.descriptionText),
+      url: trText(a.url) || null,
+      effect: a.effect && a.effect !== 'UNKNOWN_EFFECT' ? a.effect : null,
+      cause: a.cause && a.cause !== 'UNKNOWN_CAUSE' ? a.cause : null,
+      routes,
+    });
+  }
+  return { tmst: o.header?.timestamp != null ? Number(o.header.timestamp) : null, alerts };
+}
+
 export default {
   async fetch(request, env) {
     const { pathname, searchParams } = new URL(request.url);
+
+    // --- Metra realtime (protobuf decoded to JSON at the edge) ---
+    if (pathname === '/api/metra/positions') {
+      try {
+        return json(await metraPositions(env), 200, 25);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
+    if (pathname === '/api/metra/alerts') {
+      try {
+        return json(await metraAlerts(env), 200, 60);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
+    if (pathname === '/api/southshore/positions') {
+      try {
+        return json(await southShorePositions(), 200, 20);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
 
     // --- Live Train Tracker (needs key) ---
     if (pathname === '/api/positions') {

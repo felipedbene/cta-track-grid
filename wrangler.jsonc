@@ -17,6 +17,14 @@
     "enabled": true
   },
 
+  // Custom domain — wrangler provisions the DNS record + cert on the
+  // debene.dev Cloudflare zone automatically on deploy. Keep the original
+  // *.workers.dev URL alive alongside it.
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "tracker.debene.dev", "custom_domain": true }
+  ],
+
   // Position history store (see migrations/0001_init.sql).
   "d1_databases": [
     {

@@ -1,3 +1,7 @@
 # Copy to .dev.vars for local `wrangler dev`. Get a key at
 # https://www.transitchicago.com/developers/traintrackerapply/
 CTA_KEY=YOUR_CTA_KEY
+
+# Metra GTFS-realtime API token (Sanctum bearer). Request one at
+# https://metra.com/metra-gtfs-api
+METRA_TOKEN=YOUR_METRA_TOKEN

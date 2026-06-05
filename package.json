@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "wrangler": "^4.95.0"
+  },
+  "dependencies": {
+    "gtfs-realtime-bindings": "^2.0.0"
   }
 }

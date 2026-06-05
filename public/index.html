@@ -66,6 +66,16 @@
     .line-count { color: var(--green); font-size: 14px; min-width: 22px; text-align: right; }
     .metra-note { font-size: 8px; letter-spacing: 1px; color: rgba(150,180,255,0.5);
       padding: 5px 12px; border-bottom: 1px solid var(--green-faint); }
+    .metra-row { color: rgba(150,180,255,0.85); }
+    .metra-row .line-name { color: rgba(150,180,255,0.85); }
+    .metra-row .line-count { color: rgba(150,180,255,0.95); }
+    .metra-row .metra-dash { width: 18px; text-align: center; color: rgba(150,180,255,0.7);
+      letter-spacing: 0; }
+    .metra-row.off { opacity: 0.4; }
+    .ss-row .line-name { color: rgba(246,147,28,0.9); }
+    .ss-row .line-count { color: rgba(246,147,28,0.95); }
+    .ss-row .metra-dash { width: 18px; text-align: center; color: rgba(246,147,28,0.75); letter-spacing: 0; }
+    .ss-row.off { opacity: 0.4; }
 
     .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); margin: 10px 0; }
     .stat { background: var(--panel); padding: 8px 10px; }
@@ -83,8 +93,8 @@
 
     /* Train marker: a heading-rotated chevron in the line color. */
     .train-ico { transform-origin: center; }
-    .train-ico .blip { animation: ping 2s ease-out infinite; }
-    @keyframes ping { 0%{r:0;opacity:.7} 100%{r:14;opacity:0} }
+    .train-ico .blip { transform-box: fill-box; transform-origin: center; animation: ping 2s ease-out infinite; }
+    @keyframes ping { 0%{ transform: scale(0); opacity:.7 } 100%{ transform: scale(2.3); opacity:0 } }
     .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #06140e; color: var(--green);
       border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono); }
     .leaflet-popup-content { font-size: 11px; line-height: 1.5; margin: 8px 10px; }
@@ -110,6 +120,12 @@
       border-bottom: 1px solid var(--green-faint); line-height: 1.4; }
     .alert-item b { color: #ffcc00; font-weight: 400; display: block; font-size: 10px; margin-bottom: 2px; }
     .alert-none { font-size: 9px; padding: 6px 12px; color: var(--green-dim); }
+    /* Metra service alerts: steel-blue accent + per-line route chips. */
+    .alert-item.metra { border-left-color: rgba(150,180,255,0.8); }
+    .alert-item.metra b { color: rgba(180,200,255,0.95); }
+    .route-chips { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 3px; }
+    .route-chip { font-size: 7px; letter-spacing: 0.5px; padding: 1px 4px; border-radius: 2px;
+      color: #06140e; font-weight: 700; }
     /* NORAD landmark markers: glowing ring + uppercase callout label */
     .landmark { overflow: visible; }
     .lm-ring { width: 8px; height: 8px; border: 1px solid #00ffcc; border-radius: 50%;
@@ -126,6 +142,17 @@
     .landmark.burb .lm-label { left: 10px; color: rgba(150,180,255,0.6);
       text-shadow: 0 0 4px rgba(120,150,220,0.55); font-size: 7px; }
     .home-star svg { filter: drop-shadow(0 0 6px #ffcc00); animation: starpulse 2s ease-in-out infinite; }
+    /* Viewer geolocation: pulsing "you are here" dot + locate control */
+    .you-here { overflow: visible; }
+    .you-dot { position: relative; width: 14px; height: 14px; border-radius: 50%; background: #00eaff;
+      border: 2px solid #fff; box-shadow: 0 0 8px #00eaff, 0 0 16px #00eaff; }
+    .you-dot::after { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px;
+      transform: translate(-50%, -50%); border-radius: 50%; border: 1px solid #00eaff; animation: youping 1.8s ease-out infinite; }
+    @keyframes youping { 0% { width: 14px; height: 14px; opacity: .8 } 100% { width: 48px; height: 48px; opacity: 0 } }
+    .locate-btn { width: 30px; height: 30px; background: #06140e; color: var(--green); border: 1px solid var(--border);
+      border-radius: 2px; font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 0 4px rgba(0,0,0,.5); }
+    .locate-btn:hover { color: #00eaff; border-color: #00eaff; }
+    .locate-btn.locating { animation: blink 1s ease-in-out infinite; }
     @keyframes starpulse { 0%,100%{ filter: drop-shadow(0 0 4px #ffcc00) } 50%{ filter: drop-shadow(0 0 10px #ffcc00) } }
     .replay-link { color: var(--green); text-decoration: none; letter-spacing: 2px; }
     .replay-link:hover { color: #ffcc00; }
@@ -166,7 +193,16 @@
     <div class="side">
       <h3>Lines / Active Trains</h3>
       <div id="line-list"></div>
-      <div class="metra-note">╌╌ Metra regional rail (geometry)</div>
+      <div class="line-row metra-row" id="metra-row" title="Toggle Metra realtime trains">
+        <span class="metra-dash">╌╌</span>
+        <div class="line-name">Metra regional</div>
+        <div class="line-count" id="cnt-metra">0</div>
+      </div>
+      <div class="line-row ss-row" id="ss-row" title="Toggle South Shore Line trains">
+        <span class="metra-dash">╌╌</span>
+        <div class="line-name">South Shore</div>
+        <div class="line-count" id="cnt-ss">0</div>
+      </div>
       <div class="stat-grid">
         <div class="stat"><label>TOTAL TRAINS</label><b id="s-trains">--</b></div>
         <div class="stat"><label>APPROACHING</label><b id="s-app">--</b></div>
@@ -179,6 +215,8 @@
       <div id="home-arrivals"></div>
       <h3>Green Line Alerts</h3>
       <div class="alerts" id="alerts-panel"></div>
+      <h3>╌╌ Metra Service Alerts</h3>
+      <div class="alerts" id="metra-alerts-panel"></div>
       <h3>System Arrivals Feed</h3>
       <div class="feed" id="feed"></div>
     </div>
@@ -206,6 +244,19 @@
   const POLL_MS = 30_000;            // CTA positions refresh ~every minute; 30s is respectful.
   const active = new Set(Object.keys(LINES));   // toggled on/off via the sidebar.
 
+  // --- Metra regional rail: route_id -> full name. Colors come live from the
+  // geojson properties (metraColors), so the trains match their track lines. ---
+  const METRA_NAMES = {
+    'BNSF': 'BNSF', 'HC': 'Heritage Corridor', 'MD-N': 'Milw. District N',
+    'MD-W': 'Milw. District W', 'ME': 'Metra Electric', 'NCS': 'North Central',
+    'RI': 'Rock Island', 'SWS': 'SouthWest', 'UP-N': 'Union Pacific N',
+    'UP-NW': 'Union Pacific NW', 'UP-W': 'Union Pacific W',
+  };
+  const metraColors = {};            // filled from metra.geojson on load
+  let metraOn = true;                // master toggle for the Metra realtime layer
+  const SS_COLOR = '#F6931C';        // South Shore Line brand orange (Lakeshore)
+  let ssOn = true;                   // master toggle for the South Shore layer
+
   // --- Map setup ---
   const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([41.86, -87.66], 11);
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
@@ -230,13 +281,25 @@
   metraPane.style.zIndex = 240;
   metraPane.style.filter = 'drop-shadow(0 0 2px rgba(150,180,255,0.35))';
   fetch('metra.geojson').then(r => r.json()).then(geo => {
+    for (const f of geo.features) metraColors[f.properties.route] = f.properties.color;
     L.geoJSON(geo, {
       pane: 'metra',
       style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.5, dashArray: '3 5', lineCap: 'round' }),
     }).addTo(map);
+    refreshMetra();   // colors are ready; paint trains
+  }).catch(() => {});
+
+  // --- South Shore Line (NICTD): dashed regional geometry, same pane as Metra ---
+  fetch('southshore.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'metra',
+      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.55, dashArray: '3 5', lineCap: 'round' }),
+    }).addTo(map);
   }).catch(() => {});
 
   const trainLayer = L.layerGroup().addTo(map);
+  const metraLayer = L.layerGroup().addTo(map);   // realtime Metra trains (square blips)
+  const ssLayer = L.layerGroup().addTo(map);      // realtime South Shore trains
   const stationLayer = L.layerGroup().addTo(map);
 
   // --- Station dots from ctaData.js (dedupe by MAP_ID) ---
@@ -275,6 +338,18 @@
     { name: 'Midway · MDW', lat: 41.7868, lon: -87.7522 },
     { name: 'Navy Pier', lat: 41.8917, lon: -87.6086 },
     { name: 'Lake Michigan', lat: 41.93, lon: -87.58, water: true },
+    // City neighborhoods & venues — finer orientation inside Chicago
+    { name: 'Wrigley Field', lat: 41.9484, lon: -87.6553 },
+    { name: 'United Center', lat: 41.8807, lon: -87.6742 },
+    { name: 'Soldier Field', lat: 41.8623, lon: -87.6167 },
+    { name: 'McCormick Pl', lat: 41.8510, lon: -87.6160 },
+    { name: 'Chinatown', lat: 41.8520, lon: -87.6320 },
+    { name: 'Logan Sq', lat: 41.9265, lon: -87.7085 },
+    { name: 'Hyde Park · UC', lat: 41.7943, lon: -87.5907 },
+    { name: 'Bronzeville', lat: 41.8210, lon: -87.6190 },
+    { name: 'Rogers Park', lat: 42.0100, lon: -87.6700 },
+    { name: 'Garfield Pk', lat: 41.8860, lon: -87.7170 },
+    { name: 'Indiana Dunes NP', lat: 41.6533, lon: -87.0524 },
     // Suburbs (Metra reach) — orient the regional view
     { name: 'Evanston', lat: 42.045, lon: -87.690, burb: true },
     { name: 'Oak Park', lat: 41.888, lon: -87.788, burb: true },
@@ -293,6 +368,22 @@
     { name: 'Lake Forest', lat: 42.259, lon: -87.840, burb: true },
     { name: 'Fox Lake', lat: 42.396, lon: -88.183, burb: true },
     { name: 'Kenosha, WI', lat: 42.585, lon: -87.821, burb: true },
+    { name: 'Glenview', lat: 42.069, lon: -87.788, burb: true },
+    { name: 'Des Plaines', lat: 42.033, lon: -87.883, burb: true },
+    { name: 'Park Ridge', lat: 42.011, lon: -87.840, burb: true },
+    { name: 'Palatine', lat: 42.118, lon: -88.034, burb: true },
+    { name: 'Crystal Lake', lat: 42.241, lon: -88.316, burb: true },
+    { name: 'Hinsdale', lat: 41.801, lon: -87.937, burb: true },
+    { name: 'Downers Grv', lat: 41.808, lon: -88.011, burb: true },
+    { name: 'La Grange', lat: 41.805, lon: -87.869, burb: true },
+    { name: 'Lombard', lat: 41.880, lon: -88.008, burb: true },
+    { name: 'Wheaton', lat: 41.866, lon: -88.107, burb: true },
+    { name: 'Homewood', lat: 41.557, lon: -87.665, burb: true },
+    // Indiana — South Shore Line reach
+    { name: 'Hammond, IN', lat: 41.583, lon: -87.500, burb: true },
+    { name: 'Gary, IN', lat: 41.604, lon: -87.336, burb: true },
+    { name: 'Michigan City, IN', lat: 41.708, lon: -86.895, burb: true },
+    { name: 'South Bend, IN', lat: 41.709, lon: -86.317, burb: true },
   ];
   for (const lm of LANDMARKS) {
     L.marker([lm.lat, lm.lon], {
@@ -303,6 +394,61 @@
       }),
     }).addTo(map);
   }
+
+  // --- Geolocation: center on the viewer after load (graceful fallback to Chicago) ---
+  let youMarker = null;
+  let locateBtn = null;
+  function locate(zoom) {
+    if (!navigator.geolocation) return;
+    if (locateBtn) locateBtn.classList.add('locating');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (locateBtn) locateBtn.classList.remove('locating');
+        const { latitude: lat, longitude: lon } = pos.coords;
+        map.setView([lat, lon], zoom || 13, { animate: true });
+        if (youMarker) youMarker.setLatLng([lat, lon]);
+        else youMarker = L.marker([lat, lon], {
+          zIndexOffset: 1200,
+          icon: L.divIcon({ className: 'you-here', iconSize: [18, 18], iconAnchor: [9, 9], html: '<div class="you-dot"></div>' }),
+        }).addTo(map).bindPopup('<div class="pop-t">◎ YOU ARE HERE</div>');
+      },
+      () => { if (locateBtn) locateBtn.classList.remove('locating'); },   // denied/unavailable → keep default view
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }
+
+  // Re-center control (top-left, under zoom buttons)
+  const LocateControl = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd() {
+      locateBtn = L.DomUtil.create('button', 'locate-btn');
+      locateBtn.innerHTML = '◎';
+      locateBtn.title = 'Center on my location';
+      L.DomEvent.disableClickPropagation(locateBtn);
+      L.DomEvent.on(locateBtn, 'click', () => locate(14));
+      return locateBtn;
+    },
+  });
+  map.addControl(new LocateControl());
+
+  // Regional view: frame the whole network in one click — Kenosha WI (Metra UP-N)
+  // down through Chicago out to South Bend IN (South Shore) and the western Metra
+  // termini (Aurora/Elgin/Geneva).
+  const REGION_BOUNDS = L.latLngBounds([[41.40, -88.40], [42.66, -86.22]]);
+  const RegionControl = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd() {
+      const btn = L.DomUtil.create('button', 'locate-btn');
+      btn.innerHTML = '⤢';
+      btn.title = 'Regional view — entire network (Kenosha → South Bend)';
+      L.DomEvent.disableClickPropagation(btn);
+      L.DomEvent.on(btn, 'click', () => map.fitBounds(REGION_BOUNDS, { padding: [20, 20], animate: true }));
+      return btn;
+    },
+  });
+  map.addControl(new RegionControl());
+
+  locate();   // auto-locate on load
 
   // --- Alert engine state ---
   let alertsOn = false;
@@ -332,16 +478,35 @@
   }
 
   // --- Build the train chevron icon (rotated to heading) ---
-  function trainIcon(color, heading, delayed) {
+  function trainIcon(color, heading, delayed, app) {
     const h = (parseInt(heading, 10) || 0);
+    const ping = delayed || app;
     return L.divIcon({
       className: 'train-ico',
       iconSize: [28, 28], iconAnchor: [14, 14],
       html: `<svg width="28" height="28" viewBox="0 0 28 28"
         style="transform:rotate(${h}deg);filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 7px ${color})">
-        <circle class="blip" cx="14" cy="14" r="6" fill="none" stroke="${color}" stroke-width="1.5"/>
+        ${ping ? `<circle class="blip" cx="14" cy="14" r="6" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ''}
         <path d="M14 3 L21 23 L14 17.5 L7 23 Z" fill="${color}"
           stroke="${delayed ? '#ffcc00' : '#ffffff'}" stroke-width="${delayed ? 1.8 : 0.8}"/>
+      </svg>`,
+    });
+  }
+
+  // Metra trains: a square blip (vs the CTA round one) so the two systems read
+  // apart at a glance. Heading rotates the heading-spike, not the box.
+  function metraIcon(color, heading) {
+    const h = (parseInt(heading, 10) || 0);
+    return L.divIcon({
+      className: 'train-ico',
+      iconSize: [26, 26], iconAnchor: [13, 13],
+      html: `<svg width="26" height="26" viewBox="0 0 26 26"
+        style="filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 6px ${color})">
+        <g style="transform:rotate(${h}deg);transform-origin:13px 13px">
+          <path d="M13 2 L17 9 L13 6.5 L9 9 Z" fill="${color}"/>
+        </g>
+        <rect x="8" y="8" width="10" height="10" rx="1" fill="${color}"
+          stroke="#ffffff" stroke-width="0.8"/>
       </svg>`,
     });
   }
@@ -395,7 +560,7 @@
       const app = t.isApp === '1';
       const eta = minsUntil(t.arrT);
       const etaTxt = eta == null ? '—' : app ? 'DUE' : eta <= 0 ? 'DUE' : eta + ' min';
-      L.marker([+t.lat, +t.lon], { icon: trainIcon(t.color, t.heading, delayed) })
+      L.marker([+t.lat, +t.lon], { icon: trainIcon(t.color, t.heading, delayed, app) })
         .bindPopup(
           `<div class="pop-t">` +
           (t.icon ? `<img src="${t.icon}" width="16" height="16" style="vertical-align:-3px;margin-right:5px">` : '') +
@@ -417,6 +582,58 @@
 
     setFeedState('FEED NOMINAL', 'ok');
     nextPoll = POLL_MS / 1000;
+  }
+
+  // --- Metra realtime layer (independent of the CTA poll) ---
+  async function refreshMetra() {
+    if (!metraOn) { metraLayer.clearLayers(); setMetraCount(0); return; }
+    let data;
+    try {
+      data = await (await fetch('/api/metra/positions')).json();
+    } catch (e) { return; }                 // transient; keep last paint
+    if (data.error || !Array.isArray(data.trains)) return;
+
+    metraLayer.clearLayers();
+    for (const t of data.trains) {
+      const color = metraColors[t.route] || '#9bb4ff';
+      const name = METRA_NAMES[t.route] || t.route || 'Metra';
+      L.marker([t.lat, t.lon], { icon: metraIcon(color, t.heading) })
+        .bindPopup(
+          `<div class="pop-t">METRA ${t.label ? '#' + t.label : ''} · ${name}</div>` +
+          `<div class="pop-sub">route ${t.route || '—'}</div>` +
+          (t.tripId ? `<div class="pop-sub">trip ${t.tripId}</div>` : '')
+        )
+        .addTo(metraLayer);
+    }
+    setMetraCount(data.trains.length);
+  }
+
+  function setMetraCount(n) {
+    const el = document.getElementById('cnt-metra');
+    if (el) el.textContent = n;
+  }
+
+  // --- South Shore Line realtime layer (NICTD, keyless ETA SPOT feed) ---
+  async function refreshSouthShore() {
+    const setCount = (n) => { const el = document.getElementById('cnt-ss'); if (el) el.textContent = n; };
+    if (!ssOn) { ssLayer.clearLayers(); setCount(0); return; }
+    let data;
+    try {
+      data = await (await fetch('/api/southshore/positions')).json();
+    } catch (e) { return; }
+    if (data.error || !Array.isArray(data.trains)) return;
+
+    ssLayer.clearLayers();
+    for (const t of data.trains) {
+      L.marker([t.lat, t.lon], { icon: metraIcon(SS_COLOR, t.heading) })
+        .bindPopup(
+          `<div class="pop-t">SOUTH SHORE ${t.label ? '#' + t.label : ''}</div>` +
+          `<div class="pop-sub">NICTD · Chicago ↔ South Bend</div>` +
+          (t.status ? `<div class="pop-sub">${t.status.replace(/_/g, ' ').toLowerCase()}</div>` : '')
+        )
+        .addTo(ssLayer);
+    }
+    setCount(data.trains.length);
   }
 
   // --- Home arrivals at Kedzie + Trigger 1 (approaching) ---
@@ -466,6 +683,27 @@
       const a = alerts.find(x => String(x.AlertId) === id);
       notify('⚠ Green Line Alert', a.Headline || 'Service disruption', 'alert-' + id);
     });
+  }
+
+  // --- Metra service alerts (decoded from the GTFS-rt alerts protobuf) ---
+  const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  async function refreshMetraAlerts() {
+    let alerts;
+    try {
+      const data = await (await fetch('/api/metra/alerts')).json();
+      alerts = data.error ? null : data.alerts;
+    } catch (e) { return; }
+    if (!Array.isArray(alerts)) return;
+
+    const host = document.getElementById('metra-alerts-panel');
+    if (!alerts.length) { host.innerHTML = '<div class="alert-none">no active Metra alerts</div>'; return; }
+    host.innerHTML = alerts.slice(0, 12).map(a => {
+      const chips = (a.routes || []).map(r =>
+        `<span class="route-chip" style="background:${metraColors[r] || '#9bb4ff'}">${esc(r)}</span>`).join('');
+      const desc = a.description ? esc(a.description.length > 180 ? a.description.slice(0, 177) + '…' : a.description) : '';
+      return `<div class="alert-item metra"><b>${esc(a.header)}</b>${desc}` +
+             (chips ? `<div class="route-chips">${chips}</div>` : '') + `</div>`;
+    }).join('');
   }
 
   function renderStats(trains, tmst) {
@@ -545,13 +783,29 @@
   // --- Boot ---
   buildLineList();
   document.getElementById('alert-btn').addEventListener('click', enableAlerts);
+  document.getElementById('metra-row').addEventListener('click', () => {
+    metraOn = !metraOn;
+    document.getElementById('metra-row').classList.toggle('off', !metraOn);
+    refreshMetra();
+  });
+  document.getElementById('ss-row').addEventListener('click', () => {
+    ssOn = !ssOn;
+    document.getElementById('ss-row').classList.toggle('off', !ssOn);
+    refreshSouthShore();
+  });
   refresh();
   refreshHome();
   refreshAlerts();
+  refreshMetraAlerts();
+  refreshSouthShore();
+  // refreshMetra() also fires once metra.geojson (and its colors) finish loading.
   setInterval(tick, 1000);
   setInterval(refresh, POLL_MS);
   setInterval(refreshHome, POLL_MS);
   setInterval(refreshAlerts, 90_000);
+  setInterval(refreshMetra, POLL_MS);
+  setInterval(refreshMetraAlerts, 120_000);
+  setInterval(refreshSouthShore, POLL_MS);
 </script>
 </body>
 </html>
