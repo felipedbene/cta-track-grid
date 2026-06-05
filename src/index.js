@@ -30,8 +30,10 @@ const METRA_API = 'https://gtfspublic.metrarr.com/gtfs/public';
 const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.etaspot.net/position_updates.pb';
 
 // Our own public origin — the cron captures Metra through this (the request
-// context) because a direct Metra fetch 403s from the scheduled context.
-const SELF_ORIGIN = 'https://cta-track-grid.felipe-debene.workers.dev';
+// context) because a direct Metra fetch 403s from the scheduled context. Use the
+// custom domain, NOT the workers.dev URL (a worker fetching its own workers.dev
+// subdomain self-loops to a 404); the custom domain re-dispatches into the worker.
+const SELF_ORIGIN = 'https://tracker.debene.dev';
 
 // DeepSeek — distills active service alerts into a terse NORAD-style SITREP.
 const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
@@ -114,7 +116,10 @@ function countTrains(ctatt) {
 async function fetchMetraFeed(env, endpoint, ttl) {
   if (!env.METRA_TOKEN) throw new Error('METRA_TOKEN not configured');
   const res = await fetch(`${METRA_API}/${endpoint}`, {
-    headers: { Authorization: `Bearer ${env.METRA_TOKEN}` },
+    headers: {
+      Authorization: `Bearer ${env.METRA_TOKEN}`,
+      'User-Agent': 'CTA-Track-Grid/1.0 (+https://tracker.debene.dev)',
+    },
     signal: AbortSignal.timeout(10_000),
     cf: ttl > 0 ? { cacheTtl: ttl, cacheEverything: true } : undefined,
   });
