@@ -215,8 +215,11 @@ async function sha256hex(str) {
 
 // CTA Customer Alerts for a route → [{headline, desc}], tolerating the API's
 // single-object-vs-array quirk and dropping headerless rows.
-async function ctaAlerts(env, route) {
-  const data = await fetchCta(ALERTS_API, 'alerts.aspx', { routeid: route }, env, { needsKey: false, ttl: 60 });
+async function ctaAlerts(env, { route, station }) {
+  // stationid → alerts for the line(s) serving that stop (incl. stop-specific
+  // closures/elevators); routeid → whole-line alerts.
+  const params = station ? { stationid: station } : { routeid: route || 'g' };
+  const data = await fetchCta(ALERTS_API, 'alerts.aspx', params, env, { needsKey: false, ttl: 60 });
   const raw = data?.CTAAlerts?.Alert;
   const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
   return list.map((a) => ({ headline: a.Headline || '', desc: a.ShortDescription || '' })).filter((a) => a.headline);
@@ -278,27 +281,31 @@ async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, 
 
 // AI SITREP of active CTA Green Line + Metra alerts. Returns a nominal line (no
 // LLM call) when nothing is active.
-async function alertsSummary(env, ctx) {
+async function alertsSummary(env, ctx, station, stationName) {
   const [cta, metra] = await Promise.all([
-    ctaAlerts(env, 'G').catch(() => []),
+    ctaAlerts(env, station ? { station } : { route: 'G' }).catch(() => []),
     metraAlerts(env).then((m) => m.alerts).catch(() => []),
   ]);
 
   const lines = [];
-  for (const a of cta) lines.push(`CTA Green Line: ${a.headline}${a.desc ? ' — ' + a.desc : ''}`);
+  for (const a of cta) lines.push(`CTA: ${a.headline}${a.desc ? ' — ' + a.desc : ''}`);
   for (const a of metra) {
     const rt = a.routes?.length ? ` [${a.routes.join(', ')}]` : '';
     lines.push(`Metra${rt}: ${a.header}${a.description ? ' — ' + a.description : ''}`);
   }
   if (!lines.length) {
-    return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
+    return { summary: `ALL SYSTEMS NOMINAL — no active alerts${stationName ? ` near ${stationName}` : ''} or on Metra.`, count: 0, cached: false, model: null, station: stationName || null };
   }
-  const corpus = lines.join('\n');
-  // Rotate a freshness window into the key so the SITREP keeps getting a new
-  // (still accurate) phrasing roughly every 5 min, not the same line forever.
-  const freshKey = `${corpus}|t:${Math.floor(Date.now() / 300_000)}`;
-  const result = await deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, corpus, lines.length, freshKey, 0.8);
-  return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
+  // Give the model the reader's nearest station so it surfaces the most precise,
+  // location-relevant items first (its stop / its line) before broader alerts.
+  const header = stationName
+    ? `Reader's nearest station: ${stationName}. Surface anything affecting ${stationName} or its line FIRST and name the station explicitly, then broader system alerts.\n`
+    : '';
+  const corpus = header + lines.join('\n');
+  // Heavy caching: key on content only → one DeepSeek call per distinct alert
+  // set + station, reused until the alerts actually change (no timed re-gen).
+  const result = await deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, corpus, lines.length, undefined, 0.7);
+  return { ...result, station: stationName || null, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
 // --- Major Chicago events → crowd/transit advisory ---------------------------
@@ -400,9 +407,8 @@ async function eventsAdvisory(env, ctx) {
     return { summary: 'No major Chicago events flagged for today — normal transit load expected.', count: 0, cached: false, model: null, day: ymd };
   }
   const corpus = all.map((e) => `${e.time} — ${e.name} @ ${e.venue}${e.transit ? ` (transit: ${e.transit})` : ''}`).join('\n');
-  // Fresh take on the same events roughly every 15 min.
-  const freshKey = `${corpus}|t:${Math.floor(Date.now() / 900_000)}`;
-  const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, corpus, all.length, freshKey, 0.85);
+  // Heavy caching: one call per distinct event set, reused until the events change.
+  const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, corpus, all.length, undefined, 0.7);
   return { ...result, day: ymd, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
@@ -445,15 +451,14 @@ async function systemNarration(env, ctx) {
   ];
   if (conv.length) corpusLines.push(`Convergence (multiple trains inbound): ${conv.map(([s, n]) => `${s} ${n}`).join(', ')}.`);
 
-  // Bucketed load signature + a rotating ~30s freshness window: the dispatch
-  // keeps serving up a NEW jaded line every refresh (high temperature for
-  // variety), de-duped only within each 30s window so it stays bounded.
+  // Heavy caching: key on the bucketed load signature only (no time bucket), so
+  // the dispatch line is reused until the network state actually shifts (a line's
+  // load band changes, or a delay appears/clears) rather than re-genned on a timer.
   const band = (n) => (!n ? '-' : n <= 3 ? 'lo' : n <= 6 ? 'md' : 'hi');
-  const freshBucket = Math.floor(Date.now() / 30_000);
   const sig = Object.keys(LINE_NAMES).map((k) => `${k}:${band(counts[k] || 0)}`).join('|')
-    + `|dly:${[...dlyLines].sort().join(',')}|t:${freshBucket}`;
+    + `|dly:${[...dlyLines].sort().join(',')}`;
 
-  const result = await deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig, 0.95);
+  const result = await deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig, 0.85);
   // Spoken version is generated lazily on first play; expose its URL when we
   // have a stored row (hash) to key it by.
   return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
@@ -541,14 +546,15 @@ export default {
 
     // --- Customer Alerts (keyless, different host). ErrorCode 50 = no active alerts. ---
     if (pathname === '/api/alerts') {
-      return apiCta(ALERTS_API, 'alerts.aspx', {
-        routeid: searchParams.get('route') || 'G',
-      }, env, { needsKey: false, ttl: 60 });
+      const station = searchParams.get('station');
+      const params = station ? { stationid: station } : { routeid: searchParams.get('route') || 'G' };
+      return apiCta(ALERTS_API, 'alerts.aspx', params, env, { needsKey: false, ttl: 60 });
     }
-    // AI SITREP — DeepSeek digest of active alerts, cached one-call-per-alert-set.
+    // AI SITREP — DeepSeek digest of active alerts, focused on the reader's
+    // nearest station (?station=mapid&stn=name). Cached one-call-per-alert-set.
     if (pathname === '/api/alerts/summary') {
       try {
-        return json(await alertsSummary(env, ctx), 200, 120);
+        return json(await alertsSummary(env, ctx, searchParams.get('station'), searchParams.get('stn')), 200, 120);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }
@@ -564,7 +570,7 @@ export default {
     // Dispatcher narration — jaded DeepSeek one-liner on the live network state.
     if (pathname === '/api/feed/narration') {
       try {
-        return json(await systemNarration(env, ctx), 200, 20);
+        return json(await systemNarration(env, ctx), 200, 45);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }

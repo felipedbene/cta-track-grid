@@ -145,6 +145,7 @@
     @keyframes sitrepPulse { 0%,100%{ opacity:.35 } 50%{ opacity:.9 } }
     .sitrep-meta { display: block; margin-top: 6px; font-size: 7px; letter-spacing: 1px;
       color: var(--green-dim); opacity: .7; }
+    .sitrep-where { font-size: 8px; letter-spacing: 1px; color: var(--green-dim); text-transform: none; }
     .sitrep-tag { font-size: 7px; letter-spacing: 1px; color: #ffcc00; vertical-align: middle;
       border: 1px solid rgba(255,204,0,0.4); border-radius: 2px; padding: 1px 4px; margin-left: 5px; }
     /* AI dispatcher narration — the jaded one-liner atop the arrivals feed. */
@@ -249,7 +250,7 @@
            per-train rows + the raw Green Line/Metra alert lists were removed —
            the SITREP/dispatch distill them. Green Line new-disruption
            notifications still fire via refreshAlerts().) -->
-      <h3>◢ AI SITREP <span class="sitrep-tag">DEEPSEEK</span></h3>
+      <h3>◢ AI SITREP <span class="sitrep-where" id="sitrep-where"></span> <span class="sitrep-tag">DEEPSEEK</span></h3>
       <div class="sitrep" id="sitrep-panel"><span class="sitrep-load">▮ synthesizing alert digest…</span></div>
       <h3>◢ EVENT ADVISORY <span class="sitrep-tag">DEEPSEEK</span></h3>
       <div class="sitrep events" id="events-panel"><span class="sitrep-load">▮ scanning today's events…</span></div>
@@ -361,6 +362,7 @@
   const stationLayer = L.layerGroup().addTo(map);
 
   // --- Station dots from ctaData.js (dedupe by MAP_ID) ---
+  const STATIONS = [];   // {mapid, name, lat, lon} — used to find the nearest stop for alerts
   (function plotStations() {
     const seen = new Set();
     for (const s of (window.ctaStops || [])) {
@@ -368,6 +370,7 @@
       seen.add(s.MAP_ID);
       const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
       if (!m) continue;
+      STATIONS.push({ mapid: s.MAP_ID, name: s.STATION_NAME || s.STATION_DESCRIPTIVE_NAME, lat: +m[1], lon: +m[2] });
       L.circleMarker([+m[1], +m[2]], {
         radius: 2.2, color: '#00ffaa', weight: 1, opacity: 0.85,
         fillColor: '#00ffaa', fillOpacity: 0.3,
@@ -378,6 +381,26 @@
 
   // --- Home station (Green Line Kedzie) + gold star ---
   const HOME = { mapid: '41070', lat: 41.884321, lon: -87.706155, line: 'g', route: 'G', threshold: 6 };
+
+  // Alerts are driven by the nearest L station (precise, station-level), defaulting
+  // to home (Kedzie) until geolocation resolves to something closer.
+  let nearestStation = { mapid: HOME.mapid, name: 'Kedzie' };
+  function kmBetween(aLat, aLon, bLat, bLon) {
+    const toR = Math.PI / 180, R = 6371;
+    const dLat = (bLat - aLat) * toR, dLon = (bLon - aLon) * toR;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * toR) * Math.cos(bLat * toR) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(x));
+  }
+  function updateNearestStation(lat, lon) {
+    let best = null, bestD = Infinity;
+    for (const st of STATIONS) {
+      const d = kmBetween(lat, lon, st.lat, st.lon);
+      if (d < bestD) { bestD = d; best = st; }
+    }
+    if (!best || bestD > 5 || best.mapid === nearestStation.mapid) return;   // not near the 'L', or unchanged
+    nearestStation = { mapid: best.mapid, name: best.name };
+    refreshAlerts(); refreshSitrep();      // re-pull alerts for the new closest station
+  }
   L.marker([HOME.lat, HOME.lon], {
     zIndexOffset: 1000,
     icon: L.divIcon({
@@ -464,6 +487,7 @@
         if (locateBtn) locateBtn.classList.remove('locating');
         const { latitude: lat, longitude: lon } = pos.coords;
         map.setView([lat, lon], zoom || 13, { animate: true });
+        updateNearestStation(lat, lon);    // point alerts at the closest station
         if (youMarker) youMarker.setLatLng([lat, lon]);
         else youMarker = L.marker([lat, lon], {
           zIndexOffset: 1200,
@@ -726,14 +750,14 @@
   async function refreshAlerts() {
     let alerts;
     try {
-      const data = await (await fetch(`/api/alerts?route=${HOME.route}`)).json();
+      const data = await (await fetch(`/api/alerts?station=${nearestStation.mapid}`)).json();
       alerts = arr(data.CTAAlerts?.Alert);   // empty when ErrorCode 50 (no active alerts)
     } catch (e) { return; }
 
     // Panel removed from the UI; still drive the new-disruption notifications.
     reconcile(notified.alert, alerts.map(a => String(a.AlertId)), id => {
       const a = alerts.find(x => String(x.AlertId) === id);
-      notify('⚠ Green Line Alert', a.Headline || 'Service disruption', 'alert-' + id);
+      notify(`⚠ Alert · ${nearestStation.name}`, a.Headline || 'Service disruption', 'alert-' + id);
     });
   }
 
@@ -744,9 +768,11 @@
   // --- AI SITREP (DeepSeek digest of active CTA + Metra alerts) ---
   async function refreshSitrep() {
     const host = document.getElementById('sitrep-panel');
+    const whereEl = document.getElementById('sitrep-where');
+    if (whereEl) whereEl.textContent = '· ' + nearestStation.name;   // show which station it's scoped to
     let data;
     try {
-      data = await (await fetch('/api/alerts/summary')).json();
+      data = await (await fetch(`/api/alerts/summary?station=${nearestStation.mapid}&stn=${encodeURIComponent(nearestStation.name)}`)).json();
     } catch (e) { return; }                 // keep last render on transient failure
     if (!data || data.error) {
       host.className = 'sitrep nominal';
@@ -939,8 +965,8 @@
   setInterval(refreshAlerts, 90_000);
   setInterval(refreshMetra, POLL_MS);
   setInterval(refreshSitrep, 300_000);
-  setInterval(refreshEvents, 900_000);
-  setInterval(refreshNarration, 30_000);   // keep the dispatch feeding fresh lines
+  setInterval(refreshEvents, 1_800_000);
+  setInterval(refreshNarration, 60_000);   // heavily cached; only changes when network state shifts
   setInterval(refreshSouthShore, POLL_MS);
 </script>
 </body>
