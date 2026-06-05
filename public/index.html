@@ -234,10 +234,10 @@
       <div class="sitrep" id="sitrep-panel"><span class="sitrep-load">▮ synthesizing alert digest…</span></div>
       <h3>◢ EVENT ADVISORY <span class="sitrep-tag">DEEPSEEK</span></h3>
       <div class="sitrep events" id="events-panel"><span class="sitrep-load">▮ scanning today's events…</span></div>
-      <h3>Green Line Alerts</h3>
-      <div class="alerts" id="alerts-panel"></div>
-      <h3>╌╌ Metra Service Alerts</h3>
-      <div class="alerts" id="metra-alerts-panel"></div>
+      <!-- Raw Green Line + Metra alert lists removed — the AI SITREP above
+           distills them. Green Line new-disruption notifications still fire
+           via refreshAlerts(). -->
+
       <h3>System Arrivals Feed</h3>
       <div class="feed" id="feed"></div>
     </div>
@@ -694,38 +694,16 @@
       alerts = arr(data.CTAAlerts?.Alert);   // empty when ErrorCode 50 (no active alerts)
     } catch (e) { return; }
 
-    const host = document.getElementById('alerts-panel');
-    host.innerHTML = alerts.length
-      ? alerts.slice(0, 8).map(a =>
-          `<div class="alert-item"><b>${a.Headline || 'Alert'}</b>${a.ShortDescription || ''}</div>`).join('')
-      : '<div class="alert-none">no active Green Line alerts</div>';
-
+    // Panel removed from the UI; still drive the new-disruption notifications.
     reconcile(notified.alert, alerts.map(a => String(a.AlertId)), id => {
       const a = alerts.find(x => String(x.AlertId) === id);
       notify('⚠ Green Line Alert', a.Headline || 'Service disruption', 'alert-' + id);
     });
   }
 
-  // --- Metra service alerts (decoded from the GTFS-rt alerts protobuf) ---
+  // HTML-escape helper (shared by the SITREP / event-advisory panels). Metra
+  // alerts are no longer rendered raw — the SITREP summarizes them server-side.
   const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  async function refreshMetraAlerts() {
-    let alerts;
-    try {
-      const data = await (await fetch('/api/metra/alerts')).json();
-      alerts = data.error ? null : data.alerts;
-    } catch (e) { return; }
-    if (!Array.isArray(alerts)) return;
-
-    const host = document.getElementById('metra-alerts-panel');
-    if (!alerts.length) { host.innerHTML = '<div class="alert-none">no active Metra alerts</div>'; return; }
-    host.innerHTML = alerts.slice(0, 12).map(a => {
-      const chips = (a.routes || []).map(r =>
-        `<span class="route-chip" style="background:${metraColors[r] || '#9bb4ff'}">${esc(r)}</span>`).join('');
-      const desc = a.description ? esc(a.description.length > 180 ? a.description.slice(0, 177) + '…' : a.description) : '';
-      return `<div class="alert-item metra"><b>${esc(a.header)}</b>${desc}` +
-             (chips ? `<div class="route-chips">${chips}</div>` : '') + `</div>`;
-    }).join('');
-  }
 
   // --- AI SITREP (DeepSeek digest of active CTA + Metra alerts) ---
   async function refreshSitrep() {
@@ -860,7 +838,6 @@
   refresh();
   refreshHome();
   refreshAlerts();
-  refreshMetraAlerts();
   refreshSitrep();
   refreshEvents();
   refreshSouthShore();
@@ -870,7 +847,6 @@
   setInterval(refreshHome, POLL_MS);
   setInterval(refreshAlerts, 90_000);
   setInterval(refreshMetra, POLL_MS);
-  setInterval(refreshMetraAlerts, 120_000);
   setInterval(refreshSitrep, 300_000);
   setInterval(refreshEvents, 1_800_000);
   setInterval(refreshSouthShore, POLL_MS);
