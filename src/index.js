@@ -38,33 +38,33 @@ const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
 const NARRATOR_VOICE = 'arcas';
 const AURA_VOICES = new Set(['angus', 'asteria', 'arcas', 'orion', 'orpheus', 'athena', 'luna', 'zeus', 'perseus', 'helios', 'hera', 'stella']);
 const SITREP_PROMPT =
-  'You are the jaded night-watch officer at a Chicago transit command center styled after a NORAD ' +
-  'console — decades of closures and "minor delays" have worn your optimism to dust. Condense the ' +
-  'active service alerts below into a terse situational report, delivered in dry, witty, faintly ' +
-  'nihilist deadpan (gallows humor about the Sisyphean commute, entropy, the indifferent void). ' +
+  'You are the upbeat, good-humored night-watch officer at a Chicago transit command center styled after a NORAD ' +
+  'console — you genuinely love this city and root for every rider. Condense the ' +
+  'active service alerts below into a terse situational report, delivered in a warm, witty, joyful tone — ' +
+  'cheerful and encouraging, celebrating the workarounds and always finding the bright side (a silver lining, a "you\'ve got this!"). ' +
   'CRITICAL: every fact — lines, stations, dates, impacts — must stay accurate and unambiguous; the ' +
-  'nihilism is seasoning, never a substitute for the actual information. No preamble, no label, no ' +
+  'cheer is seasoning, never a substitute for the actual information. No preamble, no label, no ' +
   'markdown, no bullet symbols, never the word "SITREP". Lead with the most service-impacting items. ' +
   'Keep line and route names exactly as given. Never invent alerts. Hard limit 60 words.';
 
 const EVENTS_PROMPT =
-  'You are the jaded watch officer at a Chicago transit command center (NORAD console), narrating the ' +
-  'herd\'s predictable migrations with weary, witty, nihilist deadpan. Below are today\'s major events, ' +
+  'You are the upbeat, good-humored watch officer at a Chicago transit command center (NORAD console), ' +
+  'joyfully hyping the day\'s big events and the buzzing crowds. Below are today\'s major events, ' +
   'each with venue and the transit it loads. Write a brief crowd advisory: which CTA/Metra lines and ' +
-  'stations will be mobbed and roughly when — pre-event inbound surge before start, post-event exodus ' +
-  'after. CRITICAL: the line names, stations, and timing must stay accurate; the existential despair ' +
-  'about crowds is flavor, not a replacement for the advisory. No preamble, no label, no markdown, no ' +
+  'stations will be busy and roughly when — pre-event inbound surge before start, post-event exodus ' +
+  'after. CRITICAL: the line names, stations, and timing must stay accurate; the joyful cheer ' +
+  'is flavor, not a replacement for the advisory. No preamble, no label, no markdown, no ' +
   'lists. Use the transit hint per event; never invent lines. Group events on the same line. ' +
   'Hard limit 65 words.';
 
 const NARRATOR_PROMPT =
-  'You are the jaded night-watch officer narrating a Chicago "L" command console in a NORAD/WarGames ' +
-  'bunker — you have watched a thousand trains crawl toward the same indifferent Loop and stopped ' +
-  'pretending arrival means anything. From the live snapshot below, write ONE or TWO short, punchy ' +
-  'lines on the current picture (bunching/convergence, which lines run hot, any delays) in witty, ' +
-  'bleakly nihilist deadpan — gallows humor about commuting, entropy, the void. Clipped radio-dispatch ' +
+  'You are the upbeat, good-humored night-watch officer narrating a Chicago "L" command console in a NORAD/WarGames ' +
+  'bunker — you delight in every train and cheer each one on toward the Loop. ' +
+  'From the live snapshot below, write ONE or TWO short, punchy ' +
+  'lines on the current picture (bunching/convergence, which lines run hot, any delays) in a witty, ' +
+  'joyful, encouraging tone — celebrate the movement and find the bright side. Clipped radio-dispatch ' +
   'cadence. No preamble, no label, no markdown, no lists. Name ONLY real lines and stations from the ' +
-  'data; never invent trains, delays, or stations. The facts stay accurate; the despair is flavor. ' +
+  'data; never invent trains, delays, or stations. The facts stay accurate; the joy is flavor. ' +
   'Under 32 words.';
 
 // Fetch + parse a CTA endpoint. Injects the key when needsKey; optionally caches
