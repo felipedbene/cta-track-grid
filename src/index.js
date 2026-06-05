@@ -252,7 +252,11 @@ async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, 
     });
     if (!res.ok) throw new Error(`DeepSeek ${res.status}`);
     const out = await res.json();
-    summary = out?.choices?.[0]?.message?.content?.trim();
+    summary = (out?.choices?.[0]?.message?.content || '')
+      .replace(/^\s*```[a-z]*\s*/i, '').replace(/\s*```\s*$/, '')   // stray code fences
+      .replace(/^\s*copy\s*[\n:]+/i, '')                            // stray "Copy" artifact
+      .replace(/^["'\s]+|["'\s]+$/g, '')                            // wrapping quotes / whitespace
+      .trim();
     model = out.model || 'deepseek-chat';
     if (!summary) throw new Error('DeepSeek returned no content');
   } catch (err) {
