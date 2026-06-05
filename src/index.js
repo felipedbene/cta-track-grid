@@ -591,10 +591,11 @@ export default {
     if (pathname === '/api/history/snapshot') {
       const id = Number(searchParams.get('id'));
       const row = await env.DB
-        .prepare('SELECT observed_at, tmst, payload FROM snapshots WHERE id = ?')
+        .prepare('SELECT observed_at, tmst, payload, metra_payload, ss_payload FROM snapshots WHERE id = ?')
         .bind(id).first();
       if (!row) return json({ error: 'not found' }, 404);
-      const body = `{"observed_at":${row.observed_at},"tmst":${JSON.stringify(row.tmst ?? null)},"payload":${row.payload}}`;
+      // Embed stored JSON raw; metra/southshore are null on pre-0007 rows.
+      const body = `{"observed_at":${row.observed_at},"tmst":${JSON.stringify(row.tmst ?? null)},"payload":${row.payload},"metra":${row.metra_payload ?? 'null'},"southshore":${row.ss_payload ?? 'null'}}`;
       return new Response(body, {
         status: 200,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=86400' },
@@ -627,9 +628,17 @@ export default {
       const data = await fetchCta(LAPI, 'ttpositions.aspx', { rt: ALL_ROUTES }, env, { ttl: 0 });
       const ctatt = data.ctatt || {};
       if (ctatt.errCd && ctatt.errCd !== '0') return;
+      // Capture Metra + South Shore in the SAME row as CTA (one write/min).
+      // Non-fatal: if either upstream hiccups, store null rather than losing the
+      // CTA snapshot.
+      const [metra, ss] = await Promise.all([
+        metraPositions(env).catch(() => null),
+        southShorePositions().catch(() => null),
+      ]);
       await env.DB
-        .prepare('INSERT INTO snapshots (observed_at, tmst, train_count, payload) VALUES (?, ?, ?, ?)')
-        .bind(now, ctatt.tmst ?? null, countTrains(ctatt), JSON.stringify(data))
+        .prepare('INSERT INTO snapshots (observed_at, tmst, train_count, payload, metra_payload, ss_payload) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(now, ctatt.tmst ?? null, countTrains(ctatt), JSON.stringify(data),
+          metra ? JSON.stringify(metra) : null, ss ? JSON.stringify(ss) : null)
         .run();
     } catch (err) {
       console.error('capture failed:', err?.stack || err);

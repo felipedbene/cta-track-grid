@@ -135,13 +135,10 @@
   </div>
 
   <script src="ctaData.js"></script>
+  <script src="transit-layers.js"></script>
   <script>
-  const LINES = {
-    red:  { color: '#ff2a2a', name: 'Red' },   blue: { color: '#3399ff', name: 'Blue' },
-    brn:  { color: '#c0692f', name: 'Brown' },  g:    { color: '#00cc44', name: 'Green' },
-    org:  { color: '#ff8800', name: 'Orange' }, p:    { color: '#a64dff', name: 'Purple' },
-    pink: { color: '#ff55aa', name: 'Pink' },   y:    { color: '#ffcc00', name: 'Yellow' },
-  };
+  const LINES = TransitLayers.LINES;   // shared (see transit-layers.js)
+  const metraColors = {};             // filled from metra.geojson, for historical Metra blips
   const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
   const HOME = { lat: 41.884321, lon: -87.706155 };
 
@@ -151,90 +148,24 @@
     maxZoom: 19, subdomains: 'abcd',
   }).addTo(map);
 
-  map.createPane('lines');
-  const linePane = map.getPane('lines');
-  linePane.style.zIndex = 250;
-  linePane.style.filter = 'drop-shadow(0 0 3px rgba(0,255,170,0.5))';
-  fetch('lines.geojson').then(r => r.json()).then(geo => {
-    L.geoJSON(geo, {
-      pane: 'lines',
-      style: (f) => ({ color: f.properties.color, weight: 3, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }),
-    }).addTo(map);
-  }).catch(() => {});
-
-  map.createPane('metra');
-  const metraPane = map.getPane('metra');
-  metraPane.style.zIndex = 240;
-  metraPane.style.filter = 'drop-shadow(0 0 2px rgba(150,180,255,0.35))';
-  fetch('metra.geojson').then(r => r.json()).then(geo => {
-    L.geoJSON(geo, {
-      pane: 'metra',
-      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.5, dashArray: '3 5', lineCap: 'round' }),
-    }).addTo(map);
-  }).catch(() => {});
-
-  // --- South Shore Line (NICTD): dashed regional geometry, same pane as Metra ---
-  fetch('southshore.geojson').then(r => r.json()).then(geo => {
-    L.geoJSON(geo, {
-      pane: 'metra',
-      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.55, dashArray: '3 5', lineCap: 'round' }),
-    }).addTo(map);
-  }).catch(() => {});
+  // CTA 'L' + Metra + South Shore line geometry (shared with the live monitor).
+  TransitLayers.addLineLayers(map, { onMetraColors: (c) => Object.assign(metraColors, c) });
 
   const trainLayer = L.layerGroup().addTo(map);
+  const metraLayer = L.layerGroup().addTo(map);   // historical Metra blips
+  const ssLayer = L.layerGroup().addTo(map);      // historical South Shore blips
   const stationLayer = L.layerGroup().addTo(map);
+  const SS_COLOR = '#F6931C';                       // South Shore brand orange
 
-  (function plotStations() {
-    const seen = new Set();
-    for (const s of (window.ctaStops || [])) {
-      if (seen.has(s.MAP_ID)) continue;
-      seen.add(s.MAP_ID);
-      const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
-      if (!m) continue;
-      L.circleMarker([+m[1], +m[2]], {
-        radius: 2.2, color: '#00ffaa', weight: 1, opacity: 0.85, fillColor: '#00ffaa', fillOpacity: 0.3,
-      }).addTo(stationLayer);
-    }
-  })();
+  // Station dots (shared with the live monitor).
+  TransitLayers.plotStations(map, stationLayer);
   L.marker([HOME.lat, HOME.lon], { zIndexOffset: 1000, icon: L.divIcon({
     className: 'home-star', iconSize: [28, 28], iconAnchor: [14, 14],
     html: `<svg width="28" height="28" viewBox="0 0 24 24"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.7 7-6.3-3.8-6.3 3.8 1.7-7-5.4-4.7 7.1-.6z" fill="#ffcc00" stroke="#050d0a" stroke-width="1"/></svg>`,
   }) }).addTo(map).bindPopup('<div class="pop-t">★ HOME · KEDZIE</div>');
 
-  for (const lm of [
-    { name: 'The Loop', lat: 41.8786, lon: -87.6298 },
-    { name: "O'Hare · ORD", lat: 41.9786, lon: -87.9047 },
-    { name: 'Midway · MDW', lat: 41.7868, lon: -87.7522 },
-    { name: 'Navy Pier', lat: 41.8917, lon: -87.6086 },
-    { name: 'Lake Michigan', lat: 41.93, lon: -87.58, water: true },
-    { name: 'Evanston', lat: 42.045, lon: -87.690, burb: true },
-    { name: 'Oak Park', lat: 41.888, lon: -87.788, burb: true },
-    { name: 'Skokie', lat: 42.036, lon: -87.740, burb: true },
-    { name: 'Naperville', lat: 41.748, lon: -88.165, burb: true },
-    { name: 'Aurora', lat: 41.761, lon: -88.315, burb: true },
-    { name: 'Joliet', lat: 41.525, lon: -88.082, burb: true },
-    { name: 'Elgin', lat: 42.037, lon: -88.281, burb: true },
-    { name: 'Waukegan', lat: 42.363, lon: -87.845, burb: true },
-    { name: 'Arlington Hts', lat: 42.088, lon: -87.981, burb: true },
-    { name: 'Schaumburg', lat: 42.034, lon: -88.083, burb: true },
-    { name: 'Geneva', lat: 41.888, lon: -88.305, burb: true },
-    { name: 'Blue Island', lat: 41.657, lon: -87.680, burb: true },
-    { name: 'Univ Park', lat: 41.445, lon: -87.717, burb: true },
-    { name: 'Tinley Park', lat: 41.573, lon: -87.784, burb: true },
-    { name: 'Lake Forest', lat: 42.259, lon: -87.840, burb: true },
-    { name: 'Fox Lake', lat: 42.396, lon: -88.183, burb: true },
-    { name: 'Kenosha, WI', lat: 42.585, lon: -87.821, burb: true },
-    { name: 'Indiana Dunes NP', lat: 41.6533, lon: -87.0524 },
-    { name: 'Hammond, IN', lat: 41.583, lon: -87.500, burb: true },
-    { name: 'Gary, IN', lat: 41.604, lon: -87.336, burb: true },
-    { name: 'Michigan City, IN', lat: 41.708, lon: -86.895, burb: true },
-    { name: 'South Bend, IN', lat: 41.709, lon: -86.317, burb: true },
-  ]) {
-    L.marker([lm.lat, lm.lon], { interactive: false, zIndexOffset: 500, icon: L.divIcon({
-      className: 'landmark' + (lm.water ? ' water' : lm.burb ? ' burb' : ''), iconSize: [8, 8], iconAnchor: [4, 4],
-      html: (lm.water ? '' : '<div class="lm-ring"></div>') + `<div class="lm-label">${lm.name}</div>`,
-    }) }).addTo(map);
-  }
+  // NORAD landmark callouts (shared with /replay).
+  TransitLayers.plotLandmarks(map);
 
   function trainIcon(color, heading) {
     const h = parseInt(heading, 10) || 0;
@@ -248,10 +179,26 @@
     });
   }
 
-  function renderTrains(payload) {
-    trainLayer.clearLayers();
-    const ctatt = (payload && payload.ctatt) || {};
+  // Square blip for Metra / South Shore (matches the live monitor's markers).
+  function metraIcon(color, heading) {
+    const h = (parseInt(heading, 10) || 0);
+    return L.divIcon({
+      className: 'train-ico', iconSize: [26, 26], iconAnchor: [13, 13],
+      html: `<svg width="26" height="26" viewBox="0 0 26 26"
+        style="filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 6px ${color})">
+        <g style="transform:rotate(${h}deg);transform-origin:13px 13px">
+          <path d="M13 2 L17 9 L13 6.5 L9 9 Z" fill="${color}"/>
+        </g>
+        <rect x="8" y="8" width="10" height="10" rx="1" fill="${color}" stroke="#ffffff" stroke-width="0.8"/>
+      </svg>`,
+    });
+  }
+
+  // Render a full snapshot: CTA arrows + Metra/South Shore square blips.
+  function renderTrains(snap) {
+    trainLayer.clearLayers(); metraLayer.clearLayers(); ssLayer.clearLayers();
     let n = 0;
+    const ctatt = (snap && snap.payload && snap.payload.ctatt) || {};
     for (const route of arr(ctatt.route)) {
       const key = String(route['@name'] || route.name || '').toLowerCase();
       const cfg = LINES[key] || { color: '#00ffaa', name: key.toUpperCase() };
@@ -263,6 +210,21 @@
             `<div class="pop-sub">→ ${t.destNm || '—'}</div>`)
           .addTo(trainLayer);
       }
+    }
+    for (const t of arr(snap && snap.metra && snap.metra.trains)) {
+      if (!t.lat || !t.lon) continue;
+      n++;
+      L.marker([+t.lat, +t.lon], { icon: metraIcon(metraColors[t.route] || '#9bb4ff', t.heading) })
+        .bindPopup(`<div class="pop-t">METRA ${t.label ? '#' + t.label : ''}</div>` +
+          `<div class="pop-sub">route ${t.route || '—'}</div>`)
+        .addTo(metraLayer);
+    }
+    for (const t of arr(snap && snap.southshore && snap.southshore.trains)) {
+      if (!t.lat || !t.lon) continue;
+      n++;
+      L.marker([+t.lat, +t.lon], { icon: metraIcon(SS_COLOR, t.heading) })
+        .bindPopup(`<div class="pop-t">SOUTH SHORE ${t.label ? '#' + t.label : ''}</div>`)
+        .addTo(ssLayer);
     }
     document.getElementById('m-trains').textContent = n;
   }
@@ -298,7 +260,7 @@
     // Prefetch the next few for smooth playback.
     for (let k = 1; k <= 4 && cur + k < frames.length; k++) getSnapshot(frames[cur + k].id);
     const snap = await getSnapshot(f.id);
-    if (snap && snap.payload) renderTrains(snap.payload);
+    if (snap && snap.payload) renderTrains(snap);
   }
 
   function play() {
@@ -337,7 +299,7 @@
     scrub.value = 0;
     if (!frames.length) {
       empty.textContent = 'NO SNAPSHOTS IN RANGE — capture runs every minute once deployed.';
-      trainLayer.clearLayers();
+      trainLayer.clearLayers(); metraLayer.clearLayers(); ssLayer.clearLayers();
       document.getElementById('m-trains').textContent = '0';
       document.getElementById('t-clock').textContent = '—';
       return;
