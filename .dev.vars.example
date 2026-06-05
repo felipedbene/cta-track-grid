@@ -8,3 +8,7 @@ METRA_TOKEN=YOUR_METRA_TOKEN
 
 # DeepSeek API key — powers the /api/alerts/summary AI SITREP. https://platform.deepseek.com
 DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY
+
+# Ticketmaster Discovery API Consumer Key — concerts/festivals for /api/events/advisory.
+# Optional: without it the event advisory runs sports-only (keyless ESPN). https://developer.ticketmaster.com
+TICKETMASTER_API_KEY=YOUR_TICKETMASTER_CONSUMER_KEY

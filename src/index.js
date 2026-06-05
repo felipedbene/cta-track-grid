@@ -32,11 +32,22 @@ const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.eta
 const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
 const SITREP_PROMPT =
   'You are the watch officer at a Chicago transit command center styled after a NORAD console. ' +
-  'Condense the active service alerts below into a single terse situational report (SITREP). ' +
+  'Condense the active service alerts below into a single terse situational report. ' +
   'Clipped, factual ops phrasing — no preamble, no pleasantries, no markdown, no bullet symbols. ' +
+  'Do NOT begin with a label or the word "SITREP"; output only the report sentences. ' +
   'Lead with the most service-impacting items (suspensions, reroutes, major delays) before minor ones. ' +
-  'Keep line and route names exactly as given. Stay under 65 words. Never invent or speculate beyond the ' +
-  'alerts provided. If several alerts share a cause, merge them into one clause.';
+  'Keep line and route names exactly as given. Never invent or speculate beyond the alerts provided. ' +
+  'If several alerts share a cause, merge them into one clause. ' +
+  'Hard limit 55 words; if over, drop the least service-impacting items rather than truncating mid-sentence.';
+
+const EVENTS_PROMPT =
+  'You are the watch officer at a Chicago transit command center (NORAD console). ' +
+  'Below are major events in Chicago today, each with its venue and the transit it loads. ' +
+  'Write a brief crowd advisory: which CTA/Metra lines and stations will be busy and roughly when — ' +
+  'pre-event inbound surge before start time, post-event exodus after. ' +
+  'Clipped ops phrasing, no preamble, no label, no markdown, no bullet symbols. ' +
+  'Use the transit hint given for each event; never invent lines. Group events that load the same line. ' +
+  'Hard limit 60 words.';
 
 // Fetch + parse a CTA endpoint. Injects the key when needsKey; optionally caches
 // the upstream response at the edge for `ttl` seconds. Throws on network/parse error.
@@ -193,34 +204,16 @@ async function ctaAlerts(env, route) {
   return list.map((a) => ({ headline: a.Headline || '', desc: a.ShortDescription || '' })).filter((a) => a.headline);
 }
 
-// AI SITREP of active CTA Green Line + Metra alerts. Heavily cached to minimize
-// LLM noise/cost: at most one DeepSeek call per distinct alert set (keyed by the
-// SHA-256 of the corpus, persisted in D1 so the dedupe is global + durable), and
-// none at all when nothing is active. On a DeepSeek outage, serves the last good
-// summary instead of erroring.
-async function alertsSummary(env, ctx) {
-  const [cta, metra] = await Promise.all([
-    ctaAlerts(env, 'G').catch(() => []),
-    metraAlerts(env).then((m) => m.alerts).catch(() => []),
-  ]);
-
-  const lines = [];
-  for (const a of cta) lines.push(`CTA Green Line: ${a.headline}${a.desc ? ' — ' + a.desc : ''}`);
-  for (const a of metra) {
-    const rt = a.routes?.length ? ` [${a.routes.join(', ')}]` : '';
-    lines.push(`Metra${rt}: ${a.header}${a.description ? ' — ' + a.description : ''}`);
-  }
-  const count = lines.length;
-  if (!count) {
-    return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
-  }
-
-  const corpus = lines.join('\n');
+// Shared DeepSeek + cache core for the SITREP and event-advisory digests. The
+// model is keyed by SHA-256 of `corpus` in the given D1 `table`, so it is called
+// at most once per distinct input — globally and durably. On a DeepSeek outage,
+// serves the most recent stored summary instead of erroring. `table`/`countCol`
+// are fixed internal constants (never user input), so interpolating them is safe.
+async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count) {
   const hash = await sha256hex(corpus);
 
-  // Durable, global cache: one LLM call per distinct alert set, ever.
   try {
-    const row = await env.DB.prepare('SELECT summary, model FROM alert_summaries WHERE hash = ?').bind(hash).first();
+    const row = await env.DB.prepare(`SELECT summary, model FROM ${table} WHERE hash = ?`).bind(hash).first();
     if (row) return { summary: row.summary, model: row.model, count, cached: true };
   } catch (_) { /* table absent (pre-migration) — fall through and generate */ }
 
@@ -233,7 +226,7 @@ async function alertsSummary(env, ctx) {
       headers: { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat', stream: false, temperature: 0.2, max_tokens: 220,
-        messages: [{ role: 'system', content: SITREP_PROMPT }, { role: 'user', content: corpus }],
+        messages: [{ role: 'system', content: prompt }, { role: 'user', content: corpus }],
       }),
       signal: AbortSignal.timeout(20_000),
     });
@@ -245,19 +238,141 @@ async function alertsSummary(env, ctx) {
   } catch (err) {
     // Outage — serve the most recent good summary rather than failing loudly.
     const last = await env.DB
-      .prepare('SELECT summary, model FROM alert_summaries ORDER BY created_at DESC LIMIT 1')
+      .prepare(`SELECT summary, model FROM ${table} ORDER BY created_at DESC LIMIT 1`)
       .first().catch(() => null);
     if (last) return { summary: last.summary, model: last.model, count, cached: true, stale: true };
     throw err;
   }
 
-  // Persist so this exact alert set never costs another call.
   const write = env.DB
-    .prepare('INSERT OR REPLACE INTO alert_summaries (hash, summary, model, alert_count, created_at) VALUES (?, ?, ?, ?, ?)')
+    .prepare(`INSERT OR REPLACE INTO ${table} (hash, summary, model, ${countCol}, created_at) VALUES (?, ?, ?, ?, ?)`)
     .bind(hash, summary, model, count, Date.now()).run();
   if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
 
   return { summary, model, count, cached: false };
+}
+
+// AI SITREP of active CTA Green Line + Metra alerts. Returns a nominal line (no
+// LLM call) when nothing is active.
+async function alertsSummary(env, ctx) {
+  const [cta, metra] = await Promise.all([
+    ctaAlerts(env, 'G').catch(() => []),
+    metraAlerts(env).then((m) => m.alerts).catch(() => []),
+  ]);
+
+  const lines = [];
+  for (const a of cta) lines.push(`CTA Green Line: ${a.headline}${a.desc ? ' — ' + a.desc : ''}`);
+  for (const a of metra) {
+    const rt = a.routes?.length ? ` [${a.routes.join(', ')}]` : '';
+    lines.push(`Metra${rt}: ${a.header}${a.description ? ' — ' + a.description : ''}`);
+  }
+  if (!lines.length) {
+    return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
+  }
+  return deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, lines.join('\n'), lines.length);
+}
+
+// --- Major Chicago events → crowd/transit advisory ---------------------------
+// Sports come keyless from ESPN; concerts/festivals from Ticketmaster Discovery
+// when TICKETMASTER_API_KEY is set (silently skipped otherwise). Each venue is
+// mapped to the CTA/Metra line + station it loads, which DeepSeek turns into a
+// timed crowd advisory. Same one-call-per-distinct-set caching as the SITREP.
+
+// Venue → the transit it crushes. Substring-matched against the event venue name.
+const VENUE_TRANSIT = [
+  [/wrigley/i,                                          'Red Line · Addison'],
+  [/(guaranteed rate|rate field|comiskey|sox park)/i,  'Red Line · Sox-35th'],
+  [/united center/i,                                   'no direct L — shuttle/bus; nearest Green/Pink · Ashland'],
+  [/soldier field/i,                                   'Metra Electric · Museum Campus; Red/Orange/Green · Roosevelt'],
+  [/wintrust/i,                                         'Green Line · Cermak-McCormick Place'],
+  [/(grant park|butler field|hutchinson|jackson park|northerly island|huntington bank)/i, 'Loop "L" + Metra Electric · Museum Campus'],
+  [/(allstate arena|rosemont)/i,                       'Blue Line · Rosemont'],
+  [/(aragon|riviera|metro chicago|the vic|uptown)/i,   'Red Line · Lawrence/Sheridan'],
+  [/salt shed/i,                                       'Blue Line · Division (~0.6mi) or bus'],
+  [/(credit union 1|tinley)/i,                         'Metra Rock Island'],
+];
+function venueTransit(name) {
+  for (const [re, hint] of VENUE_TRANSIT) if (re.test(name || '')) return hint;
+  return null;
+}
+
+// Today's date in Chicago as YYYYMMDD (ESPN scoreboard ?dates=) and a Chicago
+// clock-time formatter for event start times.
+function chicagoYmd(now) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(now).reduce((o, x) => ((o[x.type] = x.value), o), {});
+  return `${p.year}${p.month}${p.day}`;
+}
+function chicagoTime(iso) {
+  if (!iso) return 'TBD';
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+}
+
+const ESPN_LEAGUES = ['baseball/mlb', 'basketball/nba', 'hockey/nhl', 'football/nfl', 'soccer/usa.1', 'basketball/wnba'];
+
+// Chicago home games today across the major leagues (keyless ESPN, edge-cached).
+async function chicagoSportsToday(ymd) {
+  const events = [];
+  await Promise.all(ESPN_LEAGUES.map(async (lg) => {
+    try {
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${lg}/scoreboard?dates=${ymd}`,
+        { cf: { cacheTtl: 1800, cacheEverything: true }, signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const e of data.events || []) {
+        const c = e.competitions?.[0];
+        if (!c || !/chicago/i.test(c.venue?.address?.city || '')) continue;   // physically in Chicago
+        const home = (c.competitors || []).find((t) => t.homeAway === 'home');
+        const away = (c.competitors || []).find((t) => t.homeAway === 'away');
+        const venue = c.venue?.fullName || 'venue TBD';
+        events.push({
+          name: `${away?.team?.displayName || 'TBD'} @ ${home?.team?.displayName || 'TBD'}`,
+          venue, time: chicagoTime(e.date), transit: venueTransit(venue),
+        });
+      }
+    } catch (_) { /* skip league on error */ }
+  }));
+  return events;
+}
+
+// Today's Chicago concerts/arts from Ticketmaster Discovery (only when keyed).
+async function chicagoShowsToday(env, now) {
+  if (!env.TICKETMASTER_API_KEY) return [];
+  const floor = Math.floor(now.getTime() / 3600000) * 3600000;       // hour-floored → stable cache
+  const start = new Date(floor).toISOString().slice(0, 19) + 'Z';
+  const end = new Date(floor + 24 * 3600000).toISOString().slice(0, 19) + 'Z';
+  const url = new URL('https://app.ticketmaster.com/discovery/v2/events.json');
+  url.search = new URLSearchParams({
+    apikey: env.TICKETMASTER_API_KEY, city: 'Chicago', stateCode: 'IL',
+    classificationName: 'music', startDateTime: start, endDateTime: end, size: '40', sort: 'date,asc',
+  }).toString();
+  try {
+    const res = await fetch(url, { cf: { cacheTtl: 1800, cacheEverything: true }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data._embedded?.events || [])
+      .map((e) => {
+        const venue = e._embedded?.venues?.[0]?.name || 'venue TBD';
+        const time = e.dates?.start?.localTime ? e.dates.start.localTime.slice(0, 5) : 'TBD';
+        return { name: e.name, venue, time, transit: venueTransit(venue) };
+      })
+      // Only major, transit-loading venues — drops the club-show noise (Empty
+      // Bottle, Kingston Mines, …) so the advisory stays about real crowds.
+      .filter((e) => e.transit);
+  } catch (_) { return []; }
+}
+
+async function eventsAdvisory(env, ctx) {
+  const now = new Date();
+  const ymd = chicagoYmd(now);
+  const [sports, shows] = await Promise.all([chicagoSportsToday(ymd), chicagoShowsToday(env, now)]);
+  const all = [...sports, ...shows].slice(0, 25);   // bound the corpus
+  if (!all.length) {
+    return { summary: 'No major Chicago events flagged for today — normal transit load expected.', count: 0, cached: false, model: null, day: ymd };
+  }
+  const lines = all.map((e) => `${e.time} — ${e.name} @ ${e.venue}${e.transit ? ` (transit: ${e.transit})` : ''}`);
+  const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, lines.join('\n'), all.length);
+  return { ...result, day: ymd };
 }
 
 export default {
@@ -314,6 +429,14 @@ export default {
     if (pathname === '/api/alerts/summary') {
       try {
         return json(await alertsSummary(env, ctx), 200, 120);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
+    // Event advisory — DeepSeek crowd forecast for today's major Chicago events.
+    if (pathname === '/api/events/advisory') {
+      try {
+        return json(await eventsAdvisory(env, ctx), 200, 600);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }

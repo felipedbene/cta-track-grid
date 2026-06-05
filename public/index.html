@@ -122,6 +122,10 @@
       box-shadow: inset 0 0 14px rgba(0,255,136,0.06); }
     .sitrep.nominal { color: var(--green-dim); border-left-color: rgba(0,255,136,0.5); }
     .sitrep.stale { border-left-color: #ff8800; }
+    /* Event advisory: cyan accent to distinguish from the amber alert SITREP. */
+    .sitrep.events { border-left-color: #00ccff; }
+    .sitrep.events.nominal { border-left-color: rgba(0,204,255,0.45); }
+    .sitrep.events .sitrep-tag { color: #00ccff; border-color: rgba(0,204,255,0.4); }
     .sitrep-load { color: var(--green-dim); animation: sitrepPulse 1.3s ease-in-out infinite; }
     @keyframes sitrepPulse { 0%,100%{ opacity:.35 } 50%{ opacity:.9 } }
     .sitrep-meta { display: block; margin-top: 6px; font-size: 7px; letter-spacing: 1px;
@@ -228,6 +232,8 @@
       <div id="home-arrivals"></div>
       <h3>◢ AI SITREP <span class="sitrep-tag">DEEPSEEK</span></h3>
       <div class="sitrep" id="sitrep-panel"><span class="sitrep-load">▮ synthesizing alert digest…</span></div>
+      <h3>◢ EVENT ADVISORY <span class="sitrep-tag">DEEPSEEK</span></h3>
+      <div class="sitrep events" id="events-panel"><span class="sitrep-load">▮ scanning today's events…</span></div>
       <h3>Green Line Alerts</h3>
       <div class="alerts" id="alerts-panel"></div>
       <h3>╌╌ Metra Service Alerts</h3>
@@ -467,7 +473,7 @@
 
   // --- Alert engine state ---
   let alertsOn = false;
-  const notified = { approach: new Set(), delay: new Set(), alert: new Set() };
+  const notified = { approach: new Set(), delay: new Set(), alert: new Set(), events: new Set() };
 
   // Notify for keys newly present since last cycle; reset tracking to current set
   // so a condition that clears and returns later fires again (no permanent suppression).
@@ -740,6 +746,30 @@
     host.innerHTML = esc(data.summary) + `<span class="sitrep-meta">${esc(meta)}</span>`;
   }
 
+  // --- Event advisory (DeepSeek crowd forecast for today's major events) ---
+  async function refreshEvents() {
+    const host = document.getElementById('events-panel');
+    let data;
+    try {
+      data = await (await fetch('/api/events/advisory')).json();
+    } catch (e) { return; }
+    if (!data || data.error) {
+      host.className = 'sitrep events nominal';
+      host.textContent = 'Event scan unavailable — standing by.';
+      return;
+    }
+    host.className = 'sitrep events' + (data.count ? '' : ' nominal') + (data.stale ? ' stale' : '');
+    const meta = data.count
+      ? `▮ ${data.count} event${data.count > 1 ? 's' : ''} today · ${data.stale ? 'last good' : data.cached ? 'cached' : 'live'} · ${data.model || 'deepseek'}`
+      : '▮ clear · auto-refresh 30m';
+    host.innerHTML = esc(data.summary) + `<span class="sitrep-meta">${esc(meta)}</span>`;
+    // One-time crowd heads-up per day when major events are flagged.
+    if (data.count && data.day) {
+      reconcile(notified.events, ['ev-' + data.day], () =>
+        notify('🎟 Major Chicago events today', data.summary.slice(0, 140), 'ev-' + data.day));
+    }
+  }
+
   function renderStats(trains, tmst) {
     const byLine = {};
     let app = 0, dly = 0;
@@ -832,6 +862,7 @@
   refreshAlerts();
   refreshMetraAlerts();
   refreshSitrep();
+  refreshEvents();
   refreshSouthShore();
   // refreshMetra() also fires once metra.geojson (and its colors) finish loading.
   setInterval(tick, 1000);
@@ -841,6 +872,7 @@
   setInterval(refreshMetra, POLL_MS);
   setInterval(refreshMetraAlerts, 120_000);
   setInterval(refreshSitrep, 300_000);
+  setInterval(refreshEvents, 1_800_000);
   setInterval(refreshSouthShore, POLL_MS);
 </script>
 </body>
