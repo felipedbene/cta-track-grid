@@ -26,6 +26,21 @@
     .topbar-title span { color: #ffaa00; }
     .topbar-meta { font-size: 10px; color: var(--green-dim); display: flex; gap: 18px; }
     .topbar-meta b { color: var(--green); font-weight: 400; }
+    /* Full-width live AI dispatch status bar (under the header, above the map). */
+    .dispatch-bar { display: flex; align-items: center; gap: 14px; flex-shrink: 0;
+      padding: 8px 16px; border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(0,255,136,0.11), rgba(0,0,0,0.4));
+      box-shadow: inset 0 0 24px rgba(0,255,136,0.08); }
+    .dispatch-bar.stale { box-shadow: inset 0 0 24px rgba(255,136,0,0.14); }
+    .dispatch-tag { font-size: 10px; letter-spacing: 2px; color: var(--green); white-space: nowrap;
+      flex-shrink: 0; padding: 3px 9px; border: 1px solid rgba(0,255,136,0.45); border-radius: 2px;
+      text-shadow: 0 0 6px rgba(0,255,136,0.5); }
+    .dispatch-text { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.45; font-style: italic;
+      color: #e8fff2; text-shadow: 0 0 5px rgba(0,255,136,0.25); }
+    .dispatch-text .nar-load { font-style: normal; color: var(--green-dim); animation: sitrepPulse 1.3s ease-in-out infinite; }
+    .dispatch-live { font-size: 8px; letter-spacing: 2px; color: #ff5a5a; white-space: nowrap;
+      flex-shrink: 0; animation: sitrepPulse 1.6s ease-in-out infinite; }
+    .controls-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 10px; }
     .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
       animation: blink 1.3s ease-in-out infinite; vertical-align: middle; margin-right: 5px; }
     .pulse.stale { background: #ffaa00; }
@@ -211,12 +226,39 @@
     </div>
   </div>
 
+  <div class="dispatch-bar" id="dispatch-bar">
+    <span class="dispatch-tag">▎ DISPATCH</span>
+    <span class="dispatch-text" id="feed-narration"><span class="nar-load">reading the board…</span></span>
+    <span class="dispatch-live">● LIVE</span>
+    <audio id="narration-audio" preload="none"></audio>
+  </div>
+
   <div class="stage">
     <div class="map-wrap">
       <div id="map"></div>
       <div class="crt-overlay"></div>
     </div>
     <div class="side">
+      <!-- AI command layer first. (Live dispatch is the top status bar; its raw
+           per-train rows + the raw Green Line/Metra alert lists were removed —
+           the SITREP/dispatch distill them. Green Line new-disruption
+           notifications still fire via refreshAlerts().) -->
+      <h3>◢ AI SITREP <span class="sitrep-tag">DEEPSEEK</span></h3>
+      <div class="sitrep" id="sitrep-panel"><span class="sitrep-load">▮ synthesizing alert digest…</span></div>
+      <h3>◢ EVENT ADVISORY <span class="sitrep-tag">DEEPSEEK</span></h3>
+      <div class="sitrep events" id="events-panel"><span class="sitrep-load">▮ scanning today's events…</span></div>
+
+      <!-- Home + system status -->
+      <h3>★ Home · Kedzie</h3>
+      <div id="home-arrivals"></div>
+      <div class="stat-grid">
+        <div class="stat"><label>TOTAL TRAINS</label><b id="s-trains">--</b></div>
+        <div class="stat"><label>APPROACHING</label><b id="s-app">--</b></div>
+        <div class="stat"><label>DELAYED</label><b id="s-dly" class="warn">--</b></div>
+        <div class="stat"><label>LAST FEED</label><b id="s-age">--</b></div>
+      </div>
+
+      <!-- Controls / toggles last -->
       <h3>Lines / Active Trains</h3>
       <div id="line-list"></div>
       <div class="line-row metra-row" id="metra-row" title="Toggle Metra realtime trains">
@@ -229,30 +271,11 @@
         <div class="line-name">South Shore</div>
         <div class="line-count" id="cnt-ss">0</div>
       </div>
-      <div class="stat-grid">
-        <div class="stat"><label>TOTAL TRAINS</label><b id="s-trains">--</b></div>
-        <div class="stat"><label>APPROACHING</label><b id="s-app">--</b></div>
-        <div class="stat"><label>DELAYED</label><b id="s-dly" class="warn">--</b></div>
-        <div class="stat"><label>LAST FEED</label><b id="s-age">--</b></div>
-      </div>
-      <h3>★ Home · Kedzie
+      <h3>Controls</h3>
+      <div class="controls-row">
         <button id="alert-btn" class="alert-btn">🔔 Enable alerts</button>
-      </h3>
-      <div id="home-arrivals"></div>
-      <h3>◢ AI SITREP <span class="sitrep-tag">DEEPSEEK</span></h3>
-      <div class="sitrep" id="sitrep-panel"><span class="sitrep-load">▮ synthesizing alert digest…</span></div>
-      <h3>◢ EVENT ADVISORY <span class="sitrep-tag">DEEPSEEK</span></h3>
-      <div class="sitrep events" id="events-panel"><span class="sitrep-load">▮ scanning today's events…</span></div>
-      <!-- Raw Green Line + Metra alert lists removed — the AI SITREP above
-           distills them. Green Line new-disruption notifications still fire
-           via refreshAlerts(). -->
-
-      <h3>System Arrivals Feed
-        <button id="narrate-btn" class="alert-btn">🔊 Narrate</button>
-      </h3>
-      <div class="feed-narration" id="feed-narration"><span class="nar-load">▎ DISPATCH · reading the board…</span></div>
-      <audio id="narration-audio" preload="none"></audio>
-      <!-- Raw per-train arrival rows removed — the AI dispatch above covers them. -->
+        <button id="narrate-btn" class="alert-btn">🔊 Voice: OFF</button>
+      </div>
     </div>
   </div>
 
@@ -821,8 +844,8 @@
       data = await (await fetch('/api/feed/narration')).json();
     } catch (e) { return; }                       // keep last line on failure
     if (!data || data.error || !data.summary) return;
-    host.className = 'feed-narration' + (data.stale ? ' stale' : '');
-    host.innerHTML = `<span class="nar-tag">▎ DISPATCH</span>` + esc(data.summary);
+    document.getElementById('dispatch-bar').classList.toggle('stale', !!data.stale);
+    host.textContent = data.summary;
     enqueueSpeech('narration', data);
   }
 
@@ -830,7 +853,7 @@
     narrateOn = !narrateOn;
     const btn = document.getElementById('narrate-btn');
     btn.classList.toggle('on', narrateOn);
-    btn.textContent = narrateOn ? '🔊 Narrating' : '🔊 Narrate';
+    btn.textContent = narrateOn ? '🔊 Voice: ON' : '🔊 Voice: OFF';
     if (narrateOn) {
       // The click is the autoplay gesture — read all three, freshly, in order.
       speechQueue.length = 0;
