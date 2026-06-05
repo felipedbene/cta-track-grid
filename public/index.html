@@ -735,6 +735,7 @@
       ? `▮ ${data.count} active alert${data.count > 1 ? 's' : ''} · ${data.stale ? 'last good' : data.cached ? 'cached' : 'live'} · ${data.model || 'deepseek'}`
       : '▮ nominal · auto-refresh 5m';
     host.innerHTML = esc(data.summary) + `<span class="sitrep-meta">${esc(meta)}</span>`;
+    enqueueSpeech('sitrep', data);
   }
 
   // --- Event advisory (DeepSeek crowd forecast for today's major events) ---
@@ -754,6 +755,7 @@
       ? `▮ ${data.count} event${data.count > 1 ? 's' : ''} today · ${data.stale ? 'last good' : data.cached ? 'cached' : 'live'} · ${data.model || 'deepseek'}`
       : '▮ clear · auto-refresh 30m';
     host.innerHTML = esc(data.summary) + `<span class="sitrep-meta">${esc(meta)}</span>`;
+    enqueueSpeech('events', data);
     // One-time crowd heads-up per day when major events are flagged.
     if (data.count && data.day) {
       reconcile(notified.events, ['ev-' + data.day], () =>
@@ -784,15 +786,33 @@
   }
 
   // --- AI dispatcher narration (jaded one-liner on live network state) ---
-  let narrateOn = false;       // TTS playback (off until the user opts in — autoplay needs a gesture)
-  let lastSpokenHash = null;   // so the same line is not re-spoken every refresh
-  let lastNarration = null;    // most recent payload, for speak-on-toggle
+  // TTS voice: speak the three AI panels (SITREP → events → dispatch) in
+  // sequence via one shared <audio>, queued so they never overlap. Off until the
+  // user opts in (the toggle click is the autoplay gesture browsers require).
+  let narrateOn = false;
+  const speakOrder = ['sitrep', 'events', 'narration'];
+  const lastData = { sitrep: null, events: null, narration: null };     // latest payload per panel
+  const lastSpoken = { sitrep: null, events: null, narration: null };   // last hash spoken per panel
+  const speechQueue = [];
+  let speaking = false;
 
-  function speakNarration(data) {
-    if (!narrateOn || !data || !data.audio || data.hash === lastSpokenHash) return;
+  function pumpSpeech() {
+    if (speaking || !speechQueue.length) return;
+    const { src } = speechQueue.shift();
     const el = document.getElementById('narration-audio');
-    el.src = data.audio;
-    el.play().then(() => { lastSpokenHash = data.hash; }).catch(() => {});  // ignore autoplay blocks
+    speaking = true;
+    el.onended = el.onerror = () => { speaking = false; pumpSpeech(); };
+    el.src = src;
+    el.play().catch(() => { speaking = false; pumpSpeech(); });   // skip on autoplay block / error
+  }
+
+  // Queue a panel's audio when its content changed (deduped by hash per panel).
+  function enqueueSpeech(kind, data) {
+    if (data && data.summary) lastData[kind] = data;             // remember latest for speak-on-toggle
+    if (!narrateOn || !data || !data.audio || !data.hash || data.hash === lastSpoken[kind]) return;
+    lastSpoken[kind] = data.hash;
+    speechQueue.push({ kind, src: data.audio });
+    pumpSpeech();
   }
 
   async function refreshNarration() {
@@ -802,10 +822,9 @@
       data = await (await fetch('/api/feed/narration')).json();
     } catch (e) { return; }                       // keep last line on failure
     if (!data || data.error || !data.summary) return;
-    lastNarration = data;
     host.className = 'feed-narration' + (data.stale ? ' stale' : '');
     host.innerHTML = `<span class="nar-tag">▎ DISPATCH</span>` + esc(data.summary);
-    speakNarration(data);
+    enqueueSpeech('narration', data);
   }
 
   function toggleNarrate() {
@@ -813,8 +832,15 @@
     const btn = document.getElementById('narrate-btn');
     btn.classList.toggle('on', narrateOn);
     btn.textContent = narrateOn ? '🔊 Narrating' : '🔊 Narrate';
-    if (narrateOn) { lastSpokenHash = null; speakNarration(lastNarration); }  // this click is the gesture
-    else { document.getElementById('narration-audio').pause(); }
+    if (narrateOn) {
+      // The click is the autoplay gesture — read all three, freshly, in order.
+      speechQueue.length = 0;
+      speakOrder.forEach(k => { lastSpoken[k] = null; });
+      speakOrder.forEach(k => enqueueSpeech(k, lastData[k]));
+    } else {
+      speechQueue.length = 0; speaking = false;
+      document.getElementById('narration-audio').pause();
+    }
   }
 
   function renderFeed(trains) {

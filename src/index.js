@@ -30,6 +30,12 @@ const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.eta
 
 // DeepSeek — distills active service alerts into a terse NORAD-style SITREP.
 const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
+
+// Aura TTS voice for the spoken AI panels. `orion` read too grave/serious;
+// `arcas` is dryer and more conversational, so the nihilist text lands as
+// sarcasm rather than doom. Overridable per request via ?voice= for auditioning.
+const NARRATOR_VOICE = 'arcas';
+const AURA_VOICES = new Set(['angus', 'asteria', 'arcas', 'orion', 'orpheus', 'athena', 'luna', 'zeus', 'perseus', 'helios', 'hera', 'stella']);
 const SITREP_PROMPT =
   'You are the jaded night-watch officer at a Chicago transit command center styled after a NORAD ' +
   'console — decades of closures and "minor delays" have worn your optimism to dust. Condense the ' +
@@ -282,7 +288,8 @@ async function alertsSummary(env, ctx) {
   if (!lines.length) {
     return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
   }
-  return deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, lines.join('\n'), lines.length);
+  const result = await deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, lines.join('\n'), lines.length);
+  return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
 // --- Major Chicago events → crowd/transit advisory ---------------------------
@@ -385,7 +392,7 @@ async function eventsAdvisory(env, ctx) {
   }
   const lines = all.map((e) => `${e.time} — ${e.name} @ ${e.venue}${e.transit ? ` (transit: ${e.transit})` : ''}`);
   const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, lines.join('\n'), all.length);
-  return { ...result, day: ymd };
+  return { ...result, day: ymd, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
 // --- AI dispatcher narration for the arrivals feed --------------------------
@@ -438,28 +445,39 @@ async function systemNarration(env, ctx) {
   return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
-// Serve (and lazily generate) the spoken narration. Deepgram Aura on Workers AI
-// voices the line once; the mp3 is stored in R2 and its key recorded on the
-// feed_narrations row, so every later play streams straight from R2.
-async function narrationAudio(env, ctx, hash) {
+// Serve (and lazily generate) the spoken version of any AI summary — SITREP,
+// event advisory, or dispatcher narration — resolved by hash across the three
+// caches. Deepgram Aura on Workers AI voices the text once; the mp3 is stored in
+// R2 and its key recorded on the owning row, so every later play streams from R2.
+const AUDIO_TABLES = ['alert_summaries', 'event_advisories', 'feed_narrations'];
+async function summaryAudio(env, ctx, hash, voiceParam) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return new Response('bad hash', { status: 400 });
-  const row = await env.DB.prepare('SELECT summary, audio_key FROM feed_narrations WHERE hash = ?').bind(hash).first();
-  if (!row) return new Response('unknown narration', { status: 404 });
+  const voice = AURA_VOICES.has(voiceParam) ? voiceParam : NARRATOR_VOICE;
+
+  let found = null;
+  for (const t of AUDIO_TABLES) {
+    const row = await env.DB.prepare(`SELECT summary, audio_key FROM ${t} WHERE hash = ?`).bind(hash).first().catch(() => null);
+    if (row) { found = { table: t, ...row }; break; }
+  }
+  if (!found) return new Response('unknown summary', { status: 404 });
 
   const audioHeaders = { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' };
-  const key = row.audio_key || `narration/${hash}.mp3`;
+  // Voice in the R2 key so each voice caches independently (and switching the
+  // default voice naturally invalidates the old, too-serious audio).
+  const key = `audio/${hash}.${voice}.mp3`;
 
-  if (row.audio_key) {
-    const obj = await env.AUDIO.get(key);
-    if (obj) return new Response(obj.body, { headers: audioHeaders });
-  }
+  const existing = await env.AUDIO.get(key);
+  if (existing) return new Response(existing.body, { headers: audioHeaders });
 
-  // Generate once with the jaded narrator voice, cache in R2, reference in D1.
-  const stream = await env.AI.run('@cf/deepgram/aura-1', { text: row.summary, speaker: 'orion' });
+  // Generate once with the chosen voice, cache in R2; record the default voice's
+  // object on the owning row so D1 references the canonical spoken version.
+  const stream = await env.AI.run('@cf/deepgram/aura-1', { text: found.summary, speaker: voice });
   const bytes = await new Response(stream).arrayBuffer();
   await env.AUDIO.put(key, bytes, { httpMetadata: { contentType: 'audio/mpeg' } });
-  const write = env.DB.prepare('UPDATE feed_narrations SET audio_key = ? WHERE hash = ?').bind(key, hash).run();
-  if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
+  if (voice === NARRATOR_VOICE) {
+    const write = env.DB.prepare(`UPDATE ${found.table} SET audio_key = ? WHERE hash = ?`).bind(key, hash).run();
+    if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
+  }
   return new Response(bytes, { headers: audioHeaders });
 }
 
@@ -537,10 +555,10 @@ export default {
         return json({ error: String(err?.message || err) }, 502);
       }
     }
-    // Spoken narration audio (Workers AI Aura → R2), keyed by narration hash.
+    // Spoken audio for any AI summary (Workers AI Aura → R2), keyed by hash.
     if (pathname === '/api/audio') {
       try {
-        return await narrationAudio(env, ctx, searchParams.get('h') || '');
+        return await summaryAudio(env, ctx, searchParams.get('h') || '', searchParams.get('voice') || '');
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }
