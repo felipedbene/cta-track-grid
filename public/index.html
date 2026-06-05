@@ -817,6 +817,10 @@
   const speakOrder = ['sitrep', 'events', 'narration'];
   const lastData = { sitrep: null, events: null, narration: null };     // latest payload per panel
   const lastSpoken = { sitrep: null, events: null, narration: null };   // last hash spoken per panel
+  const lastSpokenAt = { sitrep: 0, events: 0, narration: 0 };          // when each was last voiced
+  // Voice cadence throttle (decoupled from the 30s text feed) so TTS stays
+  // within the Workers AI budget — the chatty narration speaks at most ~2.5min.
+  const SPEAK_MIN_MS = { sitrep: 0, events: 0, narration: 150_000 };
   const speechQueue = [];
   let speaking = false;
 
@@ -834,7 +838,9 @@
   function enqueueSpeech(kind, data) {
     if (data && data.summary) lastData[kind] = data;             // remember latest for speak-on-toggle
     if (!narrateOn || !data || !data.audio || !data.hash || data.hash === lastSpoken[kind]) return;
+    if (Date.now() - lastSpokenAt[kind] < (SPEAK_MIN_MS[kind] || 0)) return;   // cadence throttle
     lastSpoken[kind] = data.hash;
+    lastSpokenAt[kind] = Date.now();
     speechQueue.push({ kind, src: data.audio });
     pumpSpeech();
   }
@@ -859,7 +865,7 @@
     if (narrateOn) {
       // The click is the autoplay gesture — read all three, freshly, in order.
       speechQueue.length = 0;
-      speakOrder.forEach(k => { lastSpoken[k] = null; });
+      speakOrder.forEach(k => { lastSpoken[k] = null; lastSpokenAt[k] = 0; });
       speakOrder.forEach(k => enqueueSpeech(k, lastData[k]));
     } else {
       speechQueue.length = 0; speaking = false;
