@@ -173,6 +173,14 @@
     }).addTo(map);
   }).catch(() => {});
 
+  // --- South Shore Line (NICTD): dashed regional geometry, same pane as Metra ---
+  fetch('southshore.geojson').then(r => r.json()).then(geo => {
+    L.geoJSON(geo, {
+      pane: 'metra',
+      style: (f) => ({ color: f.properties.color, weight: 1.6, opacity: 0.55, dashArray: '3 5', lineCap: 'round' }),
+    }).addTo(map);
+  }).catch(() => {});
+
   const trainLayer = L.layerGroup().addTo(map);
   const stationLayer = L.layerGroup().addTo(map);
 
@@ -216,6 +224,11 @@
     { name: 'Lake Forest', lat: 42.259, lon: -87.840, burb: true },
     { name: 'Fox Lake', lat: 42.396, lon: -88.183, burb: true },
     { name: 'Kenosha, WI', lat: 42.585, lon: -87.821, burb: true },
+    { name: 'Indiana Dunes NP', lat: 41.6533, lon: -87.0524 },
+    { name: 'Hammond, IN', lat: 41.583, lon: -87.500, burb: true },
+    { name: 'Gary, IN', lat: 41.604, lon: -87.336, burb: true },
+    { name: 'Michigan City, IN', lat: 41.708, lon: -86.895, burb: true },
+    { name: 'South Bend, IN', lat: 41.709, lon: -86.317, burb: true },
   ]) {
     L.marker([lm.lat, lm.lon], { interactive: false, zIndexOffset: 500, icon: L.divIcon({
       className: 'landmark' + (lm.water ? ' water' : lm.burb ? ' burb' : ''), iconSize: [8, 8], iconAnchor: [4, 4],
