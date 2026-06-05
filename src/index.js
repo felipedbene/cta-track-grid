@@ -17,6 +17,7 @@ const LAPI = 'http://lapi.transitchicago.com/api/1.0';          // positions/arr
 const ALERTS_API = 'http://www.transitchicago.com/api/1.0';     // customer alerts (keyless)
 const ALL_ROUTES = 'red,blue,brn,g,org,p,pink,y';
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;                  // keep 30 days of snapshots
+const CACHE_RETENTION_MS = 2 * 24 * 60 * 60 * 1000;            // AI summary/narration rows are ephemeral; keep 2 days
 
 // Metra regional rail — GTFS-realtime protobuf feeds (host gtfsapi.metrarail.com
 // retired 2025-11; new host below). Auth is a Sanctum bearer token kept as the
@@ -226,7 +227,7 @@ async function ctaAlerts(env, route) {
 // at most once per distinct input — globally and durably. On a DeepSeek outage,
 // serves the most recent stored summary instead of erroring. `table`/`countCol`
 // are fixed internal constants (never user input), so interpolating them is safe.
-async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, keyStr) {
+async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, keyStr, temperature = 0.7) {
   // Cache key defaults to the prompt input, but callers may pass a coarser
   // `keyStr` (e.g. a bucketed signature) so near-identical inputs share a row.
   const hash = await sha256hex(keyStr ?? corpus);
@@ -244,7 +245,7 @@ async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, 
       method: 'POST',
       headers: { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat', stream: false, temperature: 0.2, max_tokens: 220,
+        model: 'deepseek-chat', stream: false, temperature, max_tokens: 220,
         messages: [{ role: 'system', content: prompt }, { role: 'user', content: corpus }],
       }),
       signal: AbortSignal.timeout(20_000),
@@ -288,7 +289,11 @@ async function alertsSummary(env, ctx) {
   if (!lines.length) {
     return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
   }
-  const result = await deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, lines.join('\n'), lines.length);
+  const corpus = lines.join('\n');
+  // Rotate a freshness window into the key so the SITREP keeps getting a new
+  // (still accurate) phrasing roughly every 5 min, not the same line forever.
+  const freshKey = `${corpus}|t:${Math.floor(Date.now() / 300_000)}`;
+  const result = await deepseekCached(env, ctx, 'alert_summaries', 'alert_count', SITREP_PROMPT, corpus, lines.length, freshKey, 0.8);
   return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
@@ -390,8 +395,10 @@ async function eventsAdvisory(env, ctx) {
   if (!all.length) {
     return { summary: 'No major Chicago events flagged for today — normal transit load expected.', count: 0, cached: false, model: null, day: ymd };
   }
-  const lines = all.map((e) => `${e.time} — ${e.name} @ ${e.venue}${e.transit ? ` (transit: ${e.transit})` : ''}`);
-  const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, lines.join('\n'), all.length);
+  const corpus = all.map((e) => `${e.time} — ${e.name} @ ${e.venue}${e.transit ? ` (transit: ${e.transit})` : ''}`).join('\n');
+  // Fresh take on the same events roughly every 15 min.
+  const freshKey = `${corpus}|t:${Math.floor(Date.now() / 900_000)}`;
+  const result = await deepseekCached(env, ctx, 'event_advisories', 'event_count', EVENTS_PROMPT, corpus, all.length, freshKey, 0.85);
   return { ...result, day: ymd, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
 }
 
@@ -434,12 +441,15 @@ async function systemNarration(env, ctx) {
   ];
   if (conv.length) corpusLines.push(`Convergence (multiple trains inbound): ${conv.map(([s, n]) => `${s} ${n}`).join(', ')}.`);
 
-  // Bucketed signature → stable across small movements, so few model calls.
+  // Bucketed load signature + a rotating ~30s freshness window: the dispatch
+  // keeps serving up a NEW jaded line every refresh (high temperature for
+  // variety), de-duped only within each 30s window so it stays bounded.
   const band = (n) => (!n ? '-' : n <= 3 ? 'lo' : n <= 6 ? 'md' : 'hi');
+  const freshBucket = Math.floor(Date.now() / 30_000);
   const sig = Object.keys(LINE_NAMES).map((k) => `${k}:${band(counts[k] || 0)}`).join('|')
-    + `|dly:${[...dlyLines].sort().join(',')}`;
+    + `|dly:${[...dlyLines].sort().join(',')}|t:${freshBucket}`;
 
-  const result = await deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig);
+  const result = await deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig, 0.95);
   // Spoken version is generated lazily on first play; expose its URL when we
   // have a stored row (hash) to key it by.
   return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
@@ -550,7 +560,7 @@ export default {
     // Dispatcher narration — jaded DeepSeek one-liner on the live network state.
     if (pathname === '/api/feed/narration') {
       try {
-        return json(await systemNarration(env, ctx), 200, 45);
+        return json(await systemNarration(env, ctx), 200, 20);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }
@@ -597,10 +607,14 @@ export default {
     const now = controller.scheduledTime || Date.now();
 
     if (controller.cron === '0 4 * * *') {
-      ctx.waitUntil(
-        env.DB.prepare('DELETE FROM snapshots WHERE observed_at < ?')
-          .bind(now - RETENTION_MS).run()
-      );
+      const cacheCutoff = now - CACHE_RETENTION_MS;
+      ctx.waitUntil(Promise.all([
+        env.DB.prepare('DELETE FROM snapshots WHERE observed_at < ?').bind(now - RETENTION_MS).run(),
+        // The AI caches now rotate per freshness window, so purge their churn.
+        env.DB.prepare('DELETE FROM alert_summaries WHERE created_at < ?').bind(cacheCutoff).run(),
+        env.DB.prepare('DELETE FROM event_advisories WHERE created_at < ?').bind(cacheCutoff).run(),
+        env.DB.prepare('DELETE FROM feed_narrations WHERE created_at < ?').bind(cacheCutoff).run(),
+      ]));
       return;
     }
 
