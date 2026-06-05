@@ -1,0 +1,48 @@
+name: Deploy to Cloudflare
+
+# Single source of truth: production is whatever is on `main`.
+# Push to main  -> wrangler deploy (ships to production)
+# Pull request  -> wrangler deploy --dry-run (build validation only, no deploy)
+# Manual        -> workflow_dispatch from the Actions tab
+# Needs a CLOUDFLARE_API_TOKEN repo secret
+# (Cloudflare dashboard → "Edit Cloudflare Workers" token template).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# One in-flight deploy at a time; queue rather than cancel a running deploy.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: ${{ github.event_name == 'pull_request' && 'Validate (dry-run)' || 'Deploy to production' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Account ID is not secret (it shows up in dashboard URLs). Passing
+          # it lets a scoped API token skip the /memberships account lookup,
+          # which a scoped token can't call (auth error 9106).
+          accountId: b16a8a579828f17deecf2f2f0da24752
+          wranglerVersion: "4.97.0"
+          command: ${{ github.event_name == 'pull_request' && 'deploy --dry-run' || 'deploy' }}
