@@ -5,3 +5,6 @@ CTA_KEY=YOUR_CTA_KEY
 # Metra GTFS-realtime API token (Sanctum bearer). Request one at
 # https://metra.com/metra-gtfs-api
 METRA_TOKEN=YOUR_METRA_TOKEN
+
+# DeepSeek API key — powers the /api/alerts/summary AI SITREP. https://platform.deepseek.com
+DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY

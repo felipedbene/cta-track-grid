@@ -28,6 +28,16 @@ const METRA_API = 'https://gtfspublic.metrarr.com/gtfs/public';
 // feed carries no route_id, so all trains render as a single South Shore line.
 const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.etaspot.net/position_updates.pb';
 
+// DeepSeek — distills active service alerts into a terse NORAD-style SITREP.
+const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
+const SITREP_PROMPT =
+  'You are the watch officer at a Chicago transit command center styled after a NORAD console. ' +
+  'Condense the active service alerts below into a single terse situational report (SITREP). ' +
+  'Clipped, factual ops phrasing — no preamble, no pleasantries, no markdown, no bullet symbols. ' +
+  'Lead with the most service-impacting items (suspensions, reroutes, major delays) before minor ones. ' +
+  'Keep line and route names exactly as given. Stay under 65 words. Never invent or speculate beyond the ' +
+  'alerts provided. If several alerts share a cause, merge them into one clause.';
+
 // Fetch + parse a CTA endpoint. Injects the key when needsKey; optionally caches
 // the upstream response at the edge for `ttl` seconds. Throws on network/parse error.
 async function fetchCta(base, endpoint, params, env, { needsKey = true, ttl = 0 } = {}) {
@@ -167,8 +177,91 @@ async function metraAlerts(env) {
   return { tmst: o.header?.timestamp != null ? Number(o.header.timestamp) : null, alerts };
 }
 
+// SHA-256 hex of a string — keys the summary cache on alert content so the model
+// is re-invoked only when the underlying alert set actually changes.
+async function sha256hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// CTA Customer Alerts for a route → [{headline, desc}], tolerating the API's
+// single-object-vs-array quirk and dropping headerless rows.
+async function ctaAlerts(env, route) {
+  const data = await fetchCta(ALERTS_API, 'alerts.aspx', { routeid: route }, env, { needsKey: false, ttl: 60 });
+  const raw = data?.CTAAlerts?.Alert;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return list.map((a) => ({ headline: a.Headline || '', desc: a.ShortDescription || '' })).filter((a) => a.headline);
+}
+
+// AI SITREP of active CTA Green Line + Metra alerts. Heavily cached to minimize
+// LLM noise/cost: at most one DeepSeek call per distinct alert set (keyed by the
+// SHA-256 of the corpus, persisted in D1 so the dedupe is global + durable), and
+// none at all when nothing is active. On a DeepSeek outage, serves the last good
+// summary instead of erroring.
+async function alertsSummary(env, ctx) {
+  const [cta, metra] = await Promise.all([
+    ctaAlerts(env, 'G').catch(() => []),
+    metraAlerts(env).then((m) => m.alerts).catch(() => []),
+  ]);
+
+  const lines = [];
+  for (const a of cta) lines.push(`CTA Green Line: ${a.headline}${a.desc ? ' — ' + a.desc : ''}`);
+  for (const a of metra) {
+    const rt = a.routes?.length ? ` [${a.routes.join(', ')}]` : '';
+    lines.push(`Metra${rt}: ${a.header}${a.description ? ' — ' + a.description : ''}`);
+  }
+  const count = lines.length;
+  if (!count) {
+    return { summary: 'ALL SYSTEMS NOMINAL — no active CTA Green Line or Metra service alerts.', count: 0, cached: false, model: null };
+  }
+
+  const corpus = lines.join('\n');
+  const hash = await sha256hex(corpus);
+
+  // Durable, global cache: one LLM call per distinct alert set, ever.
+  try {
+    const row = await env.DB.prepare('SELECT summary, model FROM alert_summaries WHERE hash = ?').bind(hash).first();
+    if (row) return { summary: row.summary, model: row.model, count, cached: true };
+  } catch (_) { /* table absent (pre-migration) — fall through and generate */ }
+
+  if (!env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY not configured');
+
+  let summary, model;
+  try {
+    const res = await fetch(DEEPSEEK_API, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-chat', stream: false, temperature: 0.2, max_tokens: 220,
+        messages: [{ role: 'system', content: SITREP_PROMPT }, { role: 'user', content: corpus }],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) throw new Error(`DeepSeek ${res.status}`);
+    const out = await res.json();
+    summary = out?.choices?.[0]?.message?.content?.trim();
+    model = out.model || 'deepseek-chat';
+    if (!summary) throw new Error('DeepSeek returned no content');
+  } catch (err) {
+    // Outage — serve the most recent good summary rather than failing loudly.
+    const last = await env.DB
+      .prepare('SELECT summary, model FROM alert_summaries ORDER BY created_at DESC LIMIT 1')
+      .first().catch(() => null);
+    if (last) return { summary: last.summary, model: last.model, count, cached: true, stale: true };
+    throw err;
+  }
+
+  // Persist so this exact alert set never costs another call.
+  const write = env.DB
+    .prepare('INSERT OR REPLACE INTO alert_summaries (hash, summary, model, alert_count, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(hash, summary, model, count, Date.now()).run();
+  if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
+
+  return { summary, model, count, cached: false };
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const { pathname, searchParams } = new URL(request.url);
 
     // --- Metra realtime (protobuf decoded to JSON at the edge) ---
@@ -216,6 +309,14 @@ export default {
       return apiCta(ALERTS_API, 'alerts.aspx', {
         routeid: searchParams.get('route') || 'G',
       }, env, { needsKey: false, ttl: 60 });
+    }
+    // AI SITREP — DeepSeek digest of active alerts, cached one-call-per-alert-set.
+    if (pathname === '/api/alerts/summary') {
+      try {
+        return json(await alertsSummary(env, ctx), 200, 120);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
     }
 
     // --- History (D1) ---
