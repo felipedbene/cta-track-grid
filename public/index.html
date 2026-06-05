@@ -239,7 +239,14 @@
       <div class="crt-overlay"></div>
     </div>
     <div class="side">
-      <!-- AI command layer first. (Live dispatch is the top status bar; its raw
+      <!-- Quick controls up top for fast access. -->
+      <h3>Controls</h3>
+      <div class="controls-row">
+        <button id="alert-btn" class="alert-btn">🔔 Enable alerts</button>
+        <button id="narrate-btn" class="alert-btn">🔊 Voice: OFF</button>
+      </div>
+
+      <!-- AI command layer. (Live dispatch is the top status bar; its raw
            per-train rows + the raw Green Line/Metra alert lists were removed —
            the SITREP/dispatch distill them. Green Line new-disruption
            notifications still fire via refreshAlerts().) -->
@@ -258,7 +265,7 @@
         <div class="stat"><label>LAST FEED</label><b id="s-age">--</b></div>
       </div>
 
-      <!-- Controls / toggles last -->
+      <!-- Line / system toggles -->
       <h3>Lines / Active Trains</h3>
       <div id="line-list"></div>
       <div class="line-row metra-row" id="metra-row" title="Toggle Metra realtime trains">
@@ -270,11 +277,6 @@
         <span class="metra-dash">╌╌</span>
         <div class="line-name">South Shore</div>
         <div class="line-count" id="cnt-ss">0</div>
-      </div>
-      <h3>Controls</h3>
-      <div class="controls-row">
-        <button id="alert-btn" class="alert-btn">🔔 Enable alerts</button>
-        <button id="narrate-btn" class="alert-btn">🔊 Voice: OFF</button>
       </div>
     </div>
   </div>
