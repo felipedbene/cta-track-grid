@@ -247,8 +247,11 @@
            distills them. Green Line new-disruption notifications still fire
            via refreshAlerts(). -->
 
-      <h3>System Arrivals Feed</h3>
+      <h3>System Arrivals Feed
+        <button id="narrate-btn" class="alert-btn">🔊 Narrate</button>
+      </h3>
       <div class="feed-narration" id="feed-narration"><span class="nar-load">▎ DISPATCH · reading the board…</span></div>
+      <audio id="narration-audio" preload="none"></audio>
       <div class="feed" id="feed"></div>
     </div>
   </div>
@@ -781,6 +784,17 @@
   }
 
   // --- AI dispatcher narration (jaded one-liner on live network state) ---
+  let narrateOn = false;       // TTS playback (off until the user opts in — autoplay needs a gesture)
+  let lastSpokenHash = null;   // so the same line is not re-spoken every refresh
+  let lastNarration = null;    // most recent payload, for speak-on-toggle
+
+  function speakNarration(data) {
+    if (!narrateOn || !data || !data.audio || data.hash === lastSpokenHash) return;
+    const el = document.getElementById('narration-audio');
+    el.src = data.audio;
+    el.play().then(() => { lastSpokenHash = data.hash; }).catch(() => {});  // ignore autoplay blocks
+  }
+
   async function refreshNarration() {
     const host = document.getElementById('feed-narration');
     let data;
@@ -788,8 +802,19 @@
       data = await (await fetch('/api/feed/narration')).json();
     } catch (e) { return; }                       // keep last line on failure
     if (!data || data.error || !data.summary) return;
+    lastNarration = data;
     host.className = 'feed-narration' + (data.stale ? ' stale' : '');
     host.innerHTML = `<span class="nar-tag">▎ DISPATCH</span>` + esc(data.summary);
+    speakNarration(data);
+  }
+
+  function toggleNarrate() {
+    narrateOn = !narrateOn;
+    const btn = document.getElementById('narrate-btn');
+    btn.classList.toggle('on', narrateOn);
+    btn.textContent = narrateOn ? '🔊 Narrating' : '🔊 Narrate';
+    if (narrateOn) { lastSpokenHash = null; speakNarration(lastNarration); }  // this click is the gesture
+    else { document.getElementById('narration-audio').pause(); }
   }
 
   function renderFeed(trains) {
@@ -847,6 +872,7 @@
   // --- Boot ---
   buildLineList();
   document.getElementById('alert-btn').addEventListener('click', enableAlerts);
+  document.getElementById('narrate-btn').addEventListener('click', toggleNarrate);
   document.getElementById('metra-row').addEventListener('click', () => {
     metraOn = !metraOn;
     document.getElementById('metra-row').classList.toggle('off', !metraOn);

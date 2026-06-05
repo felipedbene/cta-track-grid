@@ -227,7 +227,7 @@ async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, 
 
   try {
     const row = await env.DB.prepare(`SELECT summary, model FROM ${table} WHERE hash = ?`).bind(hash).first();
-    if (row) return { summary: row.summary, model: row.model, count, cached: true };
+    if (row) return { summary: row.summary, model: row.model, count, cached: true, hash };
   } catch (_) { /* table absent (pre-migration) — fall through and generate */ }
 
   if (!env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY not configured');
@@ -262,7 +262,7 @@ async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, 
     .bind(hash, summary, model, count, Date.now()).run();
   if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
 
-  return { summary, model, count, cached: false };
+  return { summary, model, count, cached: false, hash };
 }
 
 // AI SITREP of active CTA Green Line + Metra alerts. Returns a nominal line (no
@@ -432,7 +432,35 @@ async function systemNarration(env, ctx) {
   const sig = Object.keys(LINE_NAMES).map((k) => `${k}:${band(counts[k] || 0)}`).join('|')
     + `|dly:${[...dlyLines].sort().join(',')}`;
 
-  return deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig);
+  const result = await deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig);
+  // Spoken version is generated lazily on first play; expose its URL when we
+  // have a stored row (hash) to key it by.
+  return { ...result, audio: result.hash ? `/api/audio?h=${result.hash}` : null };
+}
+
+// Serve (and lazily generate) the spoken narration. Deepgram Aura on Workers AI
+// voices the line once; the mp3 is stored in R2 and its key recorded on the
+// feed_narrations row, so every later play streams straight from R2.
+async function narrationAudio(env, ctx, hash) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) return new Response('bad hash', { status: 400 });
+  const row = await env.DB.prepare('SELECT summary, audio_key FROM feed_narrations WHERE hash = ?').bind(hash).first();
+  if (!row) return new Response('unknown narration', { status: 404 });
+
+  const audioHeaders = { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' };
+  const key = row.audio_key || `narration/${hash}.mp3`;
+
+  if (row.audio_key) {
+    const obj = await env.AUDIO.get(key);
+    if (obj) return new Response(obj.body, { headers: audioHeaders });
+  }
+
+  // Generate once with the jaded narrator voice, cache in R2, reference in D1.
+  const stream = await env.AI.run('@cf/deepgram/aura-1', { text: row.summary, speaker: 'orion' });
+  const bytes = await new Response(stream).arrayBuffer();
+  await env.AUDIO.put(key, bytes, { httpMetadata: { contentType: 'audio/mpeg' } });
+  const write = env.DB.prepare('UPDATE feed_narrations SET audio_key = ? WHERE hash = ?').bind(key, hash).run();
+  if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
+  return new Response(bytes, { headers: audioHeaders });
 }
 
 export default {
@@ -505,6 +533,14 @@ export default {
     if (pathname === '/api/feed/narration') {
       try {
         return json(await systemNarration(env, ctx), 200, 45);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
+    // Spoken narration audio (Workers AI Aura → R2), keyed by narration hash.
+    if (pathname === '/api/audio') {
+      try {
+        return await narrationAudio(env, ctx, searchParams.get('h') || '');
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }

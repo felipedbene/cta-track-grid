@@ -34,6 +34,16 @@
     }
   ],
 
+  // Workers AI — Deepgram Aura TTS for the spoken dispatcher narration.
+  // remote:true lets `wrangler dev` reach the real model (AI has no local sim);
+  // it is a dev-only hint and has no effect on production.
+  "ai": { "binding": "AI", "remote": true },
+
+  // R2 — caches the generated narration audio (mp3), keyed by narration hash.
+  "r2_buckets": [
+    { "binding": "AUDIO", "bucket_name": "cta-narration" }
+  ],
+
   // Capture positions every minute; purge >30d snapshots nightly at 04:00 UTC.
   "triggers": {
     "crons": ["* * * * *", "0 4 * * *"]
