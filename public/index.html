@@ -252,7 +252,7 @@
       </h3>
       <div class="feed-narration" id="feed-narration"><span class="nar-load">▎ DISPATCH · reading the board…</span></div>
       <audio id="narration-audio" preload="none"></audio>
-      <div class="feed" id="feed"></div>
+      <!-- Raw per-train arrival rows removed — the AI dispatch above covers them. -->
     </div>
   </div>
 
@@ -608,7 +608,6 @@
     }
 
     renderStats(trains, ctatt.tmst);
-    renderFeed(trains);
 
     // Trigger 2: Green Line delays (from positions we already have).
     const greenDelayed = trains.filter(t => t.lineKey === 'g' && t.isDly === '1').map(t => t.rn);
@@ -843,21 +842,6 @@
     }
   }
 
-  function renderFeed(trains) {
-    // Show the soonest arrivals across all active trains.
-    const rows = trains
-      .map(t => ({ t, eta: minsUntil(t.arrT) }))
-      .filter(r => r.eta != null)
-      .sort((a, b) => a.eta - b.eta)
-      .slice(0, 14);
-    const feed = document.getElementById('feed');
-    feed.innerHTML = rows.map(({ t, eta }) => {
-      const m = t.isApp === '1' || eta <= 0 ? 'DUE' : eta + 'm';
-      return `<div class="feed-item" style="border-left-color:${t.color}">` +
-        `<b>${m}</b> ${t.nextStaNm || '—'} <span style="color:${t.color}">·</span> →${t.destNm || ''}` +
-        (t.isDly === '1' ? ' <span class="pop-tag">⚠</span>' : '') + `</div>`;
-    }).join('') || '<div class="feed-item">no active trains</div>';
-  }
 
   function setFeedState(txt, kind) {
     document.getElementById('feed-state').textContent = txt;
