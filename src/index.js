@@ -119,8 +119,8 @@ async function fetchMetraFeed(env, endpoint, ttl) {
 }
 
 // Vehicle positions → flat, CTA-shaped train list the frontend can render.
-async function metraPositions(env) {
-  const feed = await fetchMetraFeed(env, 'positions', 25);
+async function metraPositions(env, ttl = 25) {
+  const feed = await fetchMetraFeed(env, 'positions', ttl);
   const trains = [];
   for (const e of feed.entity) {
     const v = e.vehicle;
@@ -631,9 +631,11 @@ export default {
       // Capture Metra + South Shore in the SAME row as CTA (one write/min).
       // Non-fatal: if either upstream hiccups, store null rather than losing the
       // CTA snapshot.
+      // ttl:0 — no edge cache: cacheEverything on the auth'd Metra fetch fails in
+      // the cron context (no incoming request), which silently nulled it.
       const [metra, ss] = await Promise.all([
-        metraPositions(env).catch(() => null),
-        southShorePositions().catch(() => null),
+        metraPositions(env, 0).catch((e) => { console.error('metra capture:', e?.message || e); return null; }),
+        southShorePositions().catch((e) => { console.error('ss capture:', e?.message || e); return null; }),
       ]);
       await env.DB
         .prepare('INSERT INTO snapshots (observed_at, tmst, train_count, payload, metra_payload, ss_payload) VALUES (?, ?, ?, ?, ?, ?)')
