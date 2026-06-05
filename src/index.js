@@ -31,23 +31,34 @@ const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.eta
 // DeepSeek — distills active service alerts into a terse NORAD-style SITREP.
 const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
 const SITREP_PROMPT =
-  'You are the watch officer at a Chicago transit command center styled after a NORAD console. ' +
-  'Condense the active service alerts below into a single terse situational report. ' +
-  'Clipped, factual ops phrasing — no preamble, no pleasantries, no markdown, no bullet symbols. ' +
-  'Do NOT begin with a label or the word "SITREP"; output only the report sentences. ' +
-  'Lead with the most service-impacting items (suspensions, reroutes, major delays) before minor ones. ' +
-  'Keep line and route names exactly as given. Never invent or speculate beyond the alerts provided. ' +
-  'If several alerts share a cause, merge them into one clause. ' +
-  'Hard limit 55 words; if over, drop the least service-impacting items rather than truncating mid-sentence.';
+  'You are the jaded night-watch officer at a Chicago transit command center styled after a NORAD ' +
+  'console — decades of closures and "minor delays" have worn your optimism to dust. Condense the ' +
+  'active service alerts below into a terse situational report, delivered in dry, witty, faintly ' +
+  'nihilist deadpan (gallows humor about the Sisyphean commute, entropy, the indifferent void). ' +
+  'CRITICAL: every fact — lines, stations, dates, impacts — must stay accurate and unambiguous; the ' +
+  'nihilism is seasoning, never a substitute for the actual information. No preamble, no label, no ' +
+  'markdown, no bullet symbols, never the word "SITREP". Lead with the most service-impacting items. ' +
+  'Keep line and route names exactly as given. Never invent alerts. Hard limit 60 words.';
 
 const EVENTS_PROMPT =
-  'You are the watch officer at a Chicago transit command center (NORAD console). ' +
-  'Below are major events in Chicago today, each with its venue and the transit it loads. ' +
-  'Write a brief crowd advisory: which CTA/Metra lines and stations will be busy and roughly when — ' +
-  'pre-event inbound surge before start time, post-event exodus after. ' +
-  'Clipped ops phrasing, no preamble, no label, no markdown, no bullet symbols. ' +
-  'Use the transit hint given for each event; never invent lines. Group events that load the same line. ' +
-  'Hard limit 60 words.';
+  'You are the jaded watch officer at a Chicago transit command center (NORAD console), narrating the ' +
+  'herd\'s predictable migrations with weary, witty, nihilist deadpan. Below are today\'s major events, ' +
+  'each with venue and the transit it loads. Write a brief crowd advisory: which CTA/Metra lines and ' +
+  'stations will be mobbed and roughly when — pre-event inbound surge before start, post-event exodus ' +
+  'after. CRITICAL: the line names, stations, and timing must stay accurate; the existential despair ' +
+  'about crowds is flavor, not a replacement for the advisory. No preamble, no label, no markdown, no ' +
+  'lists. Use the transit hint per event; never invent lines. Group events on the same line. ' +
+  'Hard limit 65 words.';
+
+const NARRATOR_PROMPT =
+  'You are the jaded night-watch officer narrating a Chicago "L" command console in a NORAD/WarGames ' +
+  'bunker — you have watched a thousand trains crawl toward the same indifferent Loop and stopped ' +
+  'pretending arrival means anything. From the live snapshot below, write ONE or TWO short, punchy ' +
+  'lines on the current picture (bunching/convergence, which lines run hot, any delays) in witty, ' +
+  'bleakly nihilist deadpan — gallows humor about commuting, entropy, the void. Clipped radio-dispatch ' +
+  'cadence. No preamble, no label, no markdown, no lists. Name ONLY real lines and stations from the ' +
+  'data; never invent trains, delays, or stations. The facts stay accurate; the despair is flavor. ' +
+  'Under 32 words.';
 
 // Fetch + parse a CTA endpoint. Injects the key when needsKey; optionally caches
 // the upstream response at the edge for `ttl` seconds. Throws on network/parse error.
@@ -209,8 +220,10 @@ async function ctaAlerts(env, route) {
 // at most once per distinct input — globally and durably. On a DeepSeek outage,
 // serves the most recent stored summary instead of erroring. `table`/`countCol`
 // are fixed internal constants (never user input), so interpolating them is safe.
-async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count) {
-  const hash = await sha256hex(corpus);
+async function deepseekCached(env, ctx, table, countCol, prompt, corpus, count, keyStr) {
+  // Cache key defaults to the prompt input, but callers may pass a coarser
+  // `keyStr` (e.g. a bucketed signature) so near-identical inputs share a row.
+  const hash = await sha256hex(keyStr ?? corpus);
 
   try {
     const row = await env.DB.prepare(`SELECT summary, model FROM ${table} WHERE hash = ?`).bind(hash).first();
@@ -375,6 +388,53 @@ async function eventsAdvisory(env, ctx) {
   return { ...result, day: ymd };
 }
 
+// --- AI dispatcher narration for the arrivals feed --------------------------
+// A jaded one/two-liner on the live network picture. The corpus carries exact
+// numbers, but the cache key is a *bucketed* signature (line loads + delayed
+// lines) so the model isn't re-run for every ±1 train — the despair is reusable.
+const LINE_NAMES = { red: 'Red', blue: 'Blue', brn: 'Brown', g: 'Green', org: 'Orange', p: 'Purple', pink: 'Pink', y: 'Yellow' };
+
+async function systemNarration(env, ctx) {
+  const data = await fetchCta(LAPI, 'ttpositions.aspx', { rt: ALL_ROUTES }, env, { ttl: 20 });
+  const ctatt = data.ctatt || {};
+  const routes = Array.isArray(ctatt.route) ? ctatt.route : ctatt.route ? [ctatt.route] : [];
+
+  const counts = {};
+  let total = 0, app = 0, dly = 0;
+  const dlyLines = new Set();
+  const nextFreq = {};
+  for (const r of routes) {
+    const key = r['@name'];
+    const trains = Array.isArray(r.train) ? r.train : r.train ? [r.train] : [];
+    counts[key] = trains.length;
+    total += trains.length;
+    for (const t of trains) {
+      if (t.isApp === '1') app++;
+      if (t.isDly === '1') { dly++; dlyLines.add(LINE_NAMES[key] || key); }
+      if (t.nextStaNm) nextFreq[t.nextStaNm] = (nextFreq[t.nextStaNm] || 0) + 1;
+    }
+  }
+  if (!total) {
+    return { summary: 'Board empty. No trains, no commuters, no point. The void keeps perfect schedule.', count: 0, cached: false, model: null };
+  }
+
+  const byLine = Object.entries(counts).filter(([, n]) => n).sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${LINE_NAMES[k] || k} ${n}`).join(', ');
+  const conv = Object.entries(nextFreq).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const corpusLines = [
+    `Live CTA 'L' snapshot. ${total} trains. By line: ${byLine}.`,
+    `Approaching stations: ${app}. Delayed: ${dly}${dlyLines.size ? ` (${[...dlyLines].join(', ')})` : ''}.`,
+  ];
+  if (conv.length) corpusLines.push(`Convergence (multiple trains inbound): ${conv.map(([s, n]) => `${s} ${n}`).join(', ')}.`);
+
+  // Bucketed signature → stable across small movements, so few model calls.
+  const band = (n) => (!n ? '-' : n <= 3 ? 'lo' : n <= 6 ? 'md' : 'hi');
+  const sig = Object.keys(LINE_NAMES).map((k) => `${k}:${band(counts[k] || 0)}`).join('|')
+    + `|dly:${[...dlyLines].sort().join(',')}`;
+
+  return deepseekCached(env, ctx, 'feed_narrations', 'train_count', NARRATOR_PROMPT, corpusLines.join('\n'), total, sig);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const { pathname, searchParams } = new URL(request.url);
@@ -437,6 +497,14 @@ export default {
     if (pathname === '/api/events/advisory') {
       try {
         return json(await eventsAdvisory(env, ctx), 200, 600);
+      } catch (err) {
+        return json({ error: String(err?.message || err) }, 502);
+      }
+    }
+    // Dispatcher narration — jaded DeepSeek one-liner on the live network state.
+    if (pathname === '/api/feed/narration') {
+      try {
+        return json(await systemNarration(env, ctx), 200, 45);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }
