@@ -504,7 +504,15 @@ export default {
     // --- Metra realtime (protobuf decoded to JSON at the edge) ---
     if (pathname === '/api/metra/positions') {
       try {
-        return json(await metraPositions(env), 200, 25);
+        const data = await metraPositions(env);
+        // Stash the latest for the cron, which can't fetch Metra itself
+        // (Metra's WAF 403s Cloudflare-internal egress; this runs in request context).
+        if (data?.trains?.length) {
+          ctx.waitUntil(env.DB
+            .prepare('INSERT OR REPLACE INTO metra_latest (id, payload, updated_at) VALUES (1, ?, ?)')
+            .bind(JSON.stringify(data), Date.now()).run().catch(() => {}));
+        }
+        return json(data, 200, 25);
       } catch (err) {
         return json({ error: String(err?.message || err) }, 502);
       }
@@ -635,20 +643,20 @@ export default {
       // Capture Metra + South Shore in the SAME row as CTA (one write/min).
       // Non-fatal: if either upstream hiccups, store null rather than losing the
       // CTA snapshot.
-      // A direct Metra fetch 403s from the scheduled context (works from the
-      // request context), so capture it via a self service-binding RPC into our
-      // own /api/metra/positions. South Shore (keyless S3) fetches fine directly.
-      const [metra, ss] = await Promise.all([
-        env.SELF.fetch('https://self/api/metra/positions')
-          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`metra ${r.status}`))))
-          .then((j) => (j && j.error ? Promise.reject(new Error(j.error)) : j))
-          .catch((e) => { console.error('metra capture:', e?.message || e); return null; }),
+      // Metra can't be fetched from the cron (its WAF 403s Cloudflare-internal
+      // egress), so use the latest stash written by the request-context
+      // /api/metra/positions handler — if it's fresh (≤3 min old). South Shore
+      // (keyless S3) fetches fine directly. metraStr is already a JSON string.
+      const [metraStr, ss] = await Promise.all([
+        env.DB.prepare('SELECT payload, updated_at FROM metra_latest WHERE id = 1').first()
+          .then((row) => (row && now - row.updated_at <= 180_000 ? row.payload : null))
+          .catch(() => null),
         southShorePositions().catch((e) => { console.error('ss capture:', e?.message || e); return null; }),
       ]);
       await env.DB
         .prepare('INSERT INTO snapshots (observed_at, tmst, train_count, payload, metra_payload, ss_payload) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(now, ctatt.tmst ?? null, countTrains(ctatt), JSON.stringify(data),
-          metra ? JSON.stringify(metra) : null, ss ? JSON.stringify(ss) : null)
+          metraStr, ss ? JSON.stringify(ss) : null)
         .run();
     } catch (err) {
       console.error('capture failed:', err?.stack || err);
