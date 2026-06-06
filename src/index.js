@@ -29,11 +29,6 @@ const METRA_API = 'https://gtfspublic.metrarr.com/gtfs/public';
 // feed carries no route_id, so all trains render as a single South Shore line.
 const SOUTHSHORE_FEED = 'https://s3.amazonaws.com/etatransit.gtfs/southshore.etaspot.net/position_updates.pb';
 
-// Our own public origin — the cron captures Metra through this (the request
-// context) because a direct Metra fetch 403s from the scheduled context. Use the
-// custom domain, NOT the workers.dev URL (a worker fetching its own workers.dev
-// subdomain self-loops to a 404); the custom domain re-dispatches into the worker.
-const SELF_ORIGIN = 'https://tracker.debene.dev';
 
 // DeepSeek — distills active service alerts into a terse NORAD-style SITREP.
 const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
@@ -641,10 +636,10 @@ export default {
       // Non-fatal: if either upstream hiccups, store null rather than losing the
       // CTA snapshot.
       // A direct Metra fetch 403s from the scheduled context (works from the
-      // request context), so capture it through our own public endpoint. South
-      // Shore (keyless S3) fetches fine directly.
+      // request context), so capture it via a self service-binding RPC into our
+      // own /api/metra/positions. South Shore (keyless S3) fetches fine directly.
       const [metra, ss] = await Promise.all([
-        fetch(`${SELF_ORIGIN}/api/metra/positions`, { signal: AbortSignal.timeout(10_000) })
+        env.SELF.fetch('https://self/api/metra/positions')
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`metra ${r.status}`))))
           .then((j) => (j && j.error ? Promise.reject(new Error(j.error)) : j))
           .catch((e) => { console.error('metra capture:', e?.message || e); return null; }),

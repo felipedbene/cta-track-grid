@@ -34,6 +34,13 @@
     }
   ],
 
+  // Self service-binding — the cron invokes our own /api/metra/positions via this
+  // (internal RPC, request context) because a direct Metra fetch 403s from the
+  // scheduled context and a network self-fetch loops (404 workers.dev / 522 zone).
+  "services": [
+    { "binding": "SELF", "service": "cta-track-grid" }
+  ],
+
   // Workers AI — Deepgram Aura TTS for the spoken dispatcher narration.
   // remote:true lets `wrangler dev` reach the real model (AI has no local sim);
   // it is a dev-only hint and has no effect on production.
