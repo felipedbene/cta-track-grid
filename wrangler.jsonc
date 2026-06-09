@@ -44,9 +44,12 @@
     { "binding": "AUDIO", "bucket_name": "cta-narration" }
   ],
 
-  // Capture positions every minute; purge >30d snapshots nightly at 04:00 UTC.
+  // Cron capture/purge retired: position collection moved to the cta-snapshot
+  // K8s collector (one row/train/tick into TimescaleDB), and D1 retention is
+  // handled there by a TimescaleDB retention policy. Empty list removes all
+  // cron triggers on deploy. The Worker still serves its HTTP/read API.
   "triggers": {
-    "crons": ["* * * * *", "0 4 * * *"]
+    "crons": []
   }
 
   // CTA_KEY is a secret, set with: wrangler secret put CTA_KEY
