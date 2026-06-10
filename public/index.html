@@ -113,6 +113,12 @@
     .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #06140e; color: var(--green);
       border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono); }
     .leaflet-popup-content { font-size: 11px; line-height: 1.5; margin: 8px 10px; }
+    /* Station name labels (tooltip-based). Subtle so they don't drown the map. */
+    .leaflet-tooltip.station-label { background: rgba(3,12,8,0.78); color: var(--green);
+      border: 1px solid var(--border); border-radius: 2px; font-family: var(--mono);
+      font-size: 8px; letter-spacing: 0.5px; padding: 1px 4px; box-shadow: none;
+      text-shadow: 0 0 4px rgba(0,255,170,0.5); }
+    .leaflet-tooltip.station-label::before { display: none; }
     .pop-t { font-size: 12px; letter-spacing: 1px; color: var(--green); }
     .pop-sub { color: var(--green-dim); font-size: 10px; }
     .pop-tag { color: #ffaa00; }
@@ -244,6 +250,7 @@
       <div class="controls-row">
         <button id="alert-btn" class="alert-btn">🔔 Enable alerts</button>
         <button id="narrate-btn" class="alert-btn">🔊 Voice: OFF</button>
+        <button id="station-names-btn" class="alert-btn">🚉 Names: OFF</button>
       </div>
 
       <!-- AI command layer. (Live dispatch is the top status bar; its raw
@@ -307,6 +314,7 @@
   let metraOn = true;                // master toggle for the Metra realtime layer
   const SS_COLOR = '#F6931C';        // South Shore Line brand orange (Lakeshore)
   let ssOn = true;                   // master toggle for the South Shore layer
+  let stationNamesOn = false;        // persistent station-name labels (default off; hover still works)
 
   // --- Map setup ---
   const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([41.86, -87.66], 11);
@@ -837,6 +845,13 @@
     ssOn = !ssOn;
     document.getElementById('ss-row').classList.toggle('off', !ssOn);
     refreshSouthShore();
+  });
+  document.getElementById('station-names-btn').addEventListener('click', () => {
+    stationNamesOn = !stationNamesOn;
+    const btn = document.getElementById('station-names-btn');
+    btn.classList.toggle('on', stationNamesOn);
+    btn.textContent = stationNamesOn ? '🚉 Names: ON' : '🚉 Names: OFF';
+    TransitLayers.setStationLabels(stationNamesOn);
   });
   refresh();
   refreshHome();

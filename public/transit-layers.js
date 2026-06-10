@@ -112,19 +112,35 @@
 
   // Station dots from ctaData.js (dedupe by MAP_ID). Returns a
   // [{mapid, name, lat, lon}] index (used for nearest-station alerts).
+  // Marker refs are kept so setStationLabels() can flip names on/off.
+  let stationMarkers = [];
   function plotStations(map, layer) {
     const stations = [], seen = new Set();
+    stationMarkers = [];
     for (const s of (window.ctaStops || [])) {
       if (seen.has(s.MAP_ID)) continue;
       seen.add(s.MAP_ID);
       const m = s.Location.match(/\(([-\d.]+),\s*([-\d.]+)\)/);
       if (!m) continue;
       stations.push({ mapid: s.MAP_ID, name: s.STATION_NAME || s.STATION_DESCRIPTIVE_NAME, lat: +m[1], lon: +m[2] });
-      L.circleMarker([+m[1], +m[2]], {
+      const mk = L.circleMarker([+m[1], +m[2]], {
         radius: 2.2, color: '#00ffaa', weight: 1, opacity: 0.85, fillColor: '#00ffaa', fillOpacity: 0.3,
-      }).bindTooltip(s.STATION_DESCRIPTIVE_NAME, { direction: 'top', opacity: 0.9 }).addTo(layer || map);
+      }).bindTooltip(s.STATION_DESCRIPTIVE_NAME, { direction: 'top', opacity: 0.9, className: 'station-label' }).addTo(layer || map);
+      stationMarkers.push(mk);
     }
     return stations;
+  }
+
+  // Toggle persistent station-name labels. When on, every station tooltip is
+  // pinned open; when off, names revert to hover-only (the default).
+  function setStationLabels(show) {
+    for (const mk of stationMarkers) {
+      const tt = mk.getTooltip();
+      if (!tt) continue;
+      const text = tt.getContent();
+      mk.unbindTooltip();
+      mk.bindTooltip(text, { permanent: !!show, direction: 'top', opacity: 0.9, className: 'station-label' });
+    }
   }
 
   function plotLandmarks(map) {
@@ -139,5 +155,5 @@
     }
   }
 
-  window.TransitLayers = { LINES, LANDMARKS, addLineLayers, plotStations, plotLandmarks };
+  window.TransitLayers = { LINES, LANDMARKS, addLineLayers, plotStations, plotLandmarks, setStationLabels };
 })();
