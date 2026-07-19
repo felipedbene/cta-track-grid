@@ -1,8 +1,8 @@
 
 
 
-// Exposed as a window global so transit-layers.js / monitor.html can read it
-// across <script> boundaries (a top-level `const` is not a window property).
+// Exposed as a window global so transit-layers.js can read it across
+// <script> boundaries (a top-level `const` is not a window property).
 window.ctaStops = [
   {
     STOP_ID: "30162",
