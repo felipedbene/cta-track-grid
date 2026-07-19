@@ -189,7 +189,7 @@
     .landmark.burb .lm-ring::after { background: rgba(150,180,255,0.85); }
     .landmark.burb .lm-label { left: 10px; color: rgba(150,180,255,0.6);
       text-shadow: 0 0 4px rgba(120,150,220,0.55); font-size: 7px; }
-    .home-star svg { filter: drop-shadow(0 0 6px #ffcc00); animation: starpulse 2s ease-in-out infinite; }
+    .home-star svg { filter: drop-shadow(0 0 7px #ffcc00); animation: starpulse 2s ease-in-out infinite; }
     /* Viewer geolocation: pulsing "you are here" dot + locate control */
     .you-here { overflow: visible; }
     .you-dot { position: relative; width: 14px; height: 14px; border-radius: 50%; background: #00eaff;
@@ -201,7 +201,9 @@
       border-radius: 2px; font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 0 4px rgba(0,0,0,.5); }
     .locate-btn:hover { color: #00eaff; border-color: #00eaff; }
     .locate-btn.locating { animation: blink 1s ease-in-out infinite; }
-    @keyframes starpulse { 0%,100%{ filter: drop-shadow(0 0 4px #ffcc00) } 50%{ filter: drop-shadow(0 0 10px #ffcc00) } }
+    /* Pulse via opacity (composited, no per-frame repaint) rather than animating
+       the drop-shadow filter — the static glow above carries the neon look. */
+    @keyframes starpulse { 0%,100%{ opacity: .72 } 50%{ opacity: 1 } }
     .replay-link { color: var(--green); text-decoration: none; letter-spacing: 2px; }
     .replay-link:hover { color: #ffcc00; }
 
@@ -331,6 +333,43 @@
   const trainLayer = L.layerGroup().addTo(map);
   const metraLayer = L.layerGroup().addTo(map);   // realtime Metra trains (square blips)
   const ssLayer = L.layerGroup().addTo(map);      // realtime South Shore trains
+
+  // Persistent marker pools (key -> {marker, iconSig}), so each poll REUSES the
+  // existing DOM node — setLatLng to move, setIcon only when the glyph actually
+  // changes — instead of clearLayers() destroying and rebuilding ~250 filtered
+  // SVG nodes every 30s. That teardown/rebuild was the main source of the paint
+  // spike that made the whole board feel heavy.
+  const trainPool = new Map();
+  const metraPool = new Map();
+  const ssPool = new Map();
+
+  // Reconcile a layer's markers against the current items. Each item:
+  //   { key, latlng, iconSig, makeIcon(), popup }
+  // makeIcon() is only invoked on first paint or when iconSig changes.
+  function syncMarkers(layer, pool, items) {
+    const live = new Set();
+    for (const it of items) {
+      live.add(it.key);
+      const entry = pool.get(it.key);
+      if (!entry) {
+        const marker = L.marker(it.latlng, { icon: it.makeIcon() });
+        if (it.popup != null) marker.bindPopup(it.popup);
+        marker.addTo(layer);
+        pool.set(it.key, { marker, iconSig: it.iconSig });
+      } else {
+        entry.marker.setLatLng(it.latlng);
+        if (entry.iconSig !== it.iconSig) {
+          entry.marker.setIcon(it.makeIcon());
+          entry.iconSig = it.iconSig;
+        }
+        if (it.popup != null) entry.marker.setPopupContent(it.popup);
+      }
+    }
+    for (const [key, entry] of pool) {
+      if (!live.has(key)) { layer.removeLayer(entry.marker); pool.delete(key); }
+    }
+  }
+  function clearPool(layer, pool) { layer.clearLayers(); pool.clear(); }
   const stationLayer = L.layerGroup().addTo(map);
 
   // Station dots + nearest-station index (shared with /replay).
@@ -462,7 +501,7 @@
       className: 'train-ico',
       iconSize: [28, 28], iconAnchor: [14, 14],
       html: `<svg width="28" height="28" viewBox="0 0 28 28"
-        style="transform:rotate(${h}deg);filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 7px ${color})">
+        style="transform:rotate(${h}deg);filter:drop-shadow(0 0 5px ${color})">
         ${ping ? `<circle class="blip" cx="14" cy="14" r="6" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ''}
         <path d="M14 3 L21 23 L14 17.5 L7 23 Z" fill="${color}"
           stroke="${delayed ? '#ffcc00' : '#ffffff'}" stroke-width="${delayed ? 1.8 : 0.8}"/>
@@ -478,7 +517,7 @@
       className: 'train-ico',
       iconSize: [26, 26], iconAnchor: [13, 13],
       html: `<svg width="26" height="26" viewBox="0 0 26 26"
-        style="filter:drop-shadow(0 0 3px ${color}) drop-shadow(0 0 6px ${color})">
+        style="filter:drop-shadow(0 0 5px ${color})">
         <g style="transform:rotate(${h}deg);transform-origin:13px 13px">
           <path d="M13 2 L17 9 L13 6.5 L9 9 Z" fill="${color}"/>
         </g>
@@ -504,7 +543,7 @@
 
   async function refresh() {
     const rts = [...active].map(k => LINES[k].code).join(',');
-    if (!rts) { trainLayer.clearLayers(); renderStats([], null); return; }
+    if (!rts) { clearPool(trainLayer, trainPool); renderStats([], null); return; }
 
     let data;
     try {
@@ -530,25 +569,29 @@
       }
     }
 
-    trainLayer.clearLayers();
+    const items = [];
     for (const t of trains) {
       if (!t.lat || !t.lon) continue;
       const delayed = t.isDly === '1';
       const app = t.isApp === '1';
       const eta = minsUntil(t.arrT);
       const etaTxt = eta == null ? '—' : app ? 'DUE' : eta <= 0 ? 'DUE' : eta + ' min';
-      L.marker([+t.lat, +t.lon], { icon: trainIcon(t.color, t.heading, delayed, app) })
-        .bindPopup(
+      items.push({
+        key: 'r' + t.rn,
+        latlng: [+t.lat, +t.lon],
+        iconSig: `${t.color}|${t.heading}|${delayed}|${app}`,
+        makeIcon: () => trainIcon(t.color, t.heading, delayed, app),
+        popup:
           `<div class="pop-t">` +
           (t.icon ? `<img src="${t.icon}" width="16" height="16" style="vertical-align:-3px;margin-right:5px">` : '') +
           `RUN ${t.rn} · ${t.lineName.toUpperCase()}</div>` +
           `<div class="pop-sub">→ ${t.destNm || '—'}</div>` +
           `<div class="pop-sub">NEXT: ${t.nextStaNm || '—'} · <b>${etaTxt}</b></div>` +
           (delayed ? `<div class="pop-tag">⚠ DELAYED</div>` : '') +
-          (app && !delayed ? `<div class="pop-tag">● APPROACHING</div>` : '')
-        )
-        .addTo(trainLayer);
+          (app && !delayed ? `<div class="pop-tag">● APPROACHING</div>` : ''),
+      });
     }
+    syncMarkers(trainLayer, trainPool, items);
 
     renderStats(trains, ctatt.tmst);
 
@@ -562,25 +605,28 @@
 
   // --- Metra realtime layer (independent of the CTA poll) ---
   async function refreshMetra() {
-    if (!metraOn) { metraLayer.clearLayers(); setMetraCount(0); return; }
+    if (!metraOn) { clearPool(metraLayer, metraPool); setMetraCount(0); return; }
     let data;
     try {
       data = await (await fetch('/api/metra/positions')).json();
     } catch (e) { return; }                 // transient; keep last paint
     if (data.error || !Array.isArray(data.trains)) return;
 
-    metraLayer.clearLayers();
-    for (const t of data.trains) {
+    const items = data.trains.map((t, i) => {
       const color = metraColors[t.route] || '#9bb4ff';
       const name = METRA_NAMES[t.route] || t.route || 'Metra';
-      L.marker([t.lat, t.lon], { icon: metraIcon(color, t.heading) })
-        .bindPopup(
+      return {
+        key: t.tripId || t.label || 'm' + i,
+        latlng: [t.lat, t.lon],
+        iconSig: `${color}|${t.heading}`,
+        makeIcon: () => metraIcon(color, t.heading),
+        popup:
           `<div class="pop-t">METRA ${t.label ? '#' + t.label : ''} · ${name}</div>` +
           `<div class="pop-sub">route ${t.route || '—'}</div>` +
-          (t.tripId ? `<div class="pop-sub">trip ${t.tripId}</div>` : '')
-        )
-        .addTo(metraLayer);
-    }
+          (t.tripId ? `<div class="pop-sub">trip ${t.tripId}</div>` : ''),
+      };
+    });
+    syncMarkers(metraLayer, metraPool, items);
     setMetraCount(data.trains.length);
   }
 
@@ -592,23 +638,24 @@
   // --- South Shore Line realtime layer (NICTD, keyless ETA SPOT feed) ---
   async function refreshSouthShore() {
     const setCount = (n) => { const el = document.getElementById('cnt-ss'); if (el) el.textContent = n; };
-    if (!ssOn) { ssLayer.clearLayers(); setCount(0); return; }
+    if (!ssOn) { clearPool(ssLayer, ssPool); setCount(0); return; }
     let data;
     try {
       data = await (await fetch('/api/southshore/positions')).json();
     } catch (e) { return; }
     if (data.error || !Array.isArray(data.trains)) return;
 
-    ssLayer.clearLayers();
-    for (const t of data.trains) {
-      L.marker([t.lat, t.lon], { icon: metraIcon(SS_COLOR, t.heading) })
-        .bindPopup(
-          `<div class="pop-t">SOUTH SHORE ${t.label ? '#' + t.label : ''}</div>` +
-          `<div class="pop-sub">NICTD · Chicago ↔ South Bend</div>` +
-          (t.status ? `<div class="pop-sub">${t.status.replace(/_/g, ' ').toLowerCase()}</div>` : '')
-        )
-        .addTo(ssLayer);
-    }
+    const items = data.trains.map((t, i) => ({
+      key: t.label || 's' + i,
+      latlng: [t.lat, t.lon],
+      iconSig: `${SS_COLOR}|${t.heading}`,
+      makeIcon: () => metraIcon(SS_COLOR, t.heading),
+      popup:
+        `<div class="pop-t">SOUTH SHORE ${t.label ? '#' + t.label : ''}</div>` +
+        `<div class="pop-sub">NICTD · Chicago ↔ South Bend</div>` +
+        (t.status ? `<div class="pop-sub">${t.status.replace(/_/g, ' ').toLowerCase()}</div>` : ''),
+    }));
+    syncMarkers(ssLayer, ssPool, items);
     setCount(data.trains.length);
   }
 
@@ -861,15 +908,25 @@
   refreshNarration();
   refreshSouthShore();
   // refreshMetra() also fires once metra.geojson (and its colors) finish loading.
-  setInterval(tick, 1000);
-  setInterval(refresh, POLL_MS);
-  setInterval(refreshHome, POLL_MS);
-  setInterval(refreshAlerts, 90_000);
-  setInterval(refreshMetra, POLL_MS);
-  setInterval(refreshSitrep, 300_000);
-  setInterval(refreshEvents, 1_800_000);
-  setInterval(refreshNarration, 60_000);   // heavily cached; only changes when network state shifts
-  setInterval(refreshSouthShore, POLL_MS);
+  //
+  // Skip every poll while the tab/window is hidden: no point fetching feeds and
+  // repainting markers no one is looking at (and it drains battery). On return
+  // to visible, fire an immediate catch-up so the board isn't stale.
+  const vis = (fn) => () => { if (!document.hidden) fn(); };
+  setInterval(vis(tick), 1000);
+  setInterval(vis(refresh), POLL_MS);
+  setInterval(vis(refreshHome), POLL_MS);
+  setInterval(vis(refreshAlerts), 90_000);
+  setInterval(vis(refreshMetra), POLL_MS);
+  setInterval(vis(refreshSitrep), 300_000);
+  setInterval(vis(refreshEvents), 1_800_000);
+  setInterval(vis(refreshNarration), 60_000);   // heavily cached; only changes when network state shifts
+  setInterval(vis(refreshSouthShore), POLL_MS);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    refresh(); refreshHome(); refreshMetra(); refreshSouthShore();
+  });
 </script>
 </body>
 </html>
